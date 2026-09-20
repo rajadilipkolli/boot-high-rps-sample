@@ -44,7 +44,7 @@ Write-Host "Building app..."
 if ($IsWindows) {
     cmd /c "mvnw.cmd clean package -DskipTests"
 } else {
-    ./mvnw clean package -DskipTests
+    sh -c "./mvnw clean package -DskipTests"
 }
 docker compose -p boot-high-rps-sample -f docker/docker-compose.yml build app
 if ($LASTEXITCODE -ne 0) {
@@ -90,7 +90,7 @@ if ((Test-Path -LiteralPath $CompletionMarker -PathType Leaf) -and $RequiredFeed
     if ($IsWindows) {
         cmd /c "mvnw.cmd exec:java -Dexec.mainClass=com.example.highrps.gatling.setup.DataGenerator -Dexec.classpathScope=test -DdataDir=$DataDirectory -Dprofile=$Profile"
     } else {
-        ./mvnw exec:java -Dexec.mainClass=com.example.highrps.gatling.setup.DataGenerator -Dexec.classpathScope=test "-DdataDir=$DataDirectory" "-Dprofile=$Profile"
+        sh -c "./mvnw exec:java -Dexec.mainClass=com.example.highrps.gatling.setup.DataGenerator -Dexec.classpathScope=test -DdataDir=$DataDirectory -Dprofile=$Profile"
     }
 
     if ($LASTEXITCODE -ne 0) {
@@ -110,7 +110,7 @@ Write-Host "Running Gatling with Profile: $Profile..."
 if ($IsWindows) {
     cmd /c "mvnw.cmd gatling:test -Dprofile=$Profile -DdurationMinutes=$DurationMinutes -DwarmupMinutes=$WarmupMinutes"
 } else {
-    ./mvnw gatling:test "-Dprofile=$Profile" "-DdurationMinutes=$DurationMinutes" "-DwarmupMinutes=$WarmupMinutes"
+    sh -c "./mvnw gatling:test -Dprofile=$Profile -DdurationMinutes=$DurationMinutes -DwarmupMinutes=$WarmupMinutes"
 }
 $GatlingExitCode = $LASTEXITCODE
 
