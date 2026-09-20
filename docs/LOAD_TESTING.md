@@ -1,4 +1,4 @@
-# Load Testing Guide
+﻿# Load Testing Guide
 
 This document outlines the procedure to load test `boot-high-rps-sample` and evaluate its maximum sustainable RPS.
 
@@ -15,8 +15,8 @@ Baseline and high-RPS runs must keep the dataset (including mutable/deletable po
 6. Generate data: ./mvnw exec:java -Dexec.mainClass="com.example.highrps.gatling.setup.DataGenerator" -Dexec.classpathScope=test
 
 Alternatively, use the orchestration scripts:
-- `scripts/test-local.ps1` is the self-contained script used by CI.
-- `scripts/run-load-test.ps1` assumes a manually started app (like in the steps above).
+- `../scripts/test-local.ps1` is the self-contained script used by CI.
+- `../scripts/run-load-test.ps1` assumes a manually started app (like in the steps above).
 
 The data generator builds shared read/create pools, as well as dedicated mutable and deletable pools. The deletable pools are sized large enough so each run uses them as a non-repeating queue. For longer runs, increase the deletable pool sizes in your config to avoid starvation.
 
@@ -54,7 +54,7 @@ Mutation weights are kept low by default to simulate typical read-heavy CMS traf
 
 Per-endpoint (per-API) statistics are the **primary** comparison view, providing granular insight into how specific API optimizations perform. Global statistics are provided as a complementary view.
 
-CI (`.github/workflows/boot-high-rps-sample-perf.yml`) runs HEAD once and compares against a persisted baseline file, rather than checking out two commits for a live dual run.
+CI (`../.github/workflows/boot-high-rps-sample-perf.yml`) runs HEAD once and compares against a persisted baseline file, rather than checking out two commits for a live dual run.
 
 1. **Baseline**: Run a baseline and save the Gatling stats.json.
 2. **High RPS**: Run your modified HEAD and save the Gatling stats.json.
@@ -66,7 +66,7 @@ You can view the detailed Gatling HTML report at:
 
 ## Diagnostics Collection
 
-*(Note: The `collect_diagnostics.py` script and diagnostics artifact upload described below are not present in the current CI workflow. This content is marked as not yet implemented in CI.)*
+
 
 Diagnostics are collected as a first-class output of each benchmark run.
 * **What is collected:** JVM/app metrics (CPU, heap, GC, allocation, threads), database metrics (connections, pool utilization, query latency), host metrics (CPU/Memory), docker stats snapshots, application logs, and GC logs.
