@@ -93,7 +93,7 @@ jobs:
             fi
             docker compose -f docker/docker-compose.yml down -v || true
             if [ -f docker/docker-compose-monitoring.yml ]; then
-              docker compose -f docker/docker-compose-monitoring.yml down -v || true
+              docker compose -f docker/docker-compose-monitoring.yml -f docker/docker-compose-sentinel.yml down -v || true
             fi
           }
           trap cleanup EXIT
