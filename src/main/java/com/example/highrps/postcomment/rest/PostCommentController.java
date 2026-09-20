@@ -1,0 +1,128 @@
+package com.example.highrps.postcomment.rest;
+
+import com.example.highrps.postcomment.command.CreatePostCommentCommand;
+import com.example.highrps.postcomment.command.PostCommentCommandResult;
+import com.example.highrps.postcomment.command.PostCommentCommandService;
+import com.example.highrps.postcomment.command.UpdatePostCommentCommand;
+import com.example.highrps.postcomment.domain.vo.PostCommentId;
+import com.example.highrps.postcomment.query.GetPostCommentQuery;
+import com.example.highrps.postcomment.query.PostCommentQueryService;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Positive;
+import java.net.URI;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
+
+@Validated
+@RestController
+@RequestMapping("/posts/{postId}/comments")
+public class PostCommentController {
+    private final PostCommentCommandService commandService;
+    private final PostCommentQueryService queryService;
+
+    /**
+     * Creates a post-comment controller.
+     *
+     * @param commandService comment write service
+     * @param queryService comment read service
+     */
+    public PostCommentController(PostCommentCommandService commandService, PostCommentQueryService queryService) {
+        this.commandService = commandService;
+        this.queryService = queryService;
+    }
+
+    /**
+     * Lists comments for a post.
+     *
+     * @param postId the parent post identifier
+     * @return the post's comments
+     */
+    @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<List<PostCommentCommandResult>> getAllComments(@PathVariable @Positive Long postId) {
+        return ResponseEntity.ok(queryService.getCommentsByPostId(postId));
+    }
+
+    /**
+     * Retrieves a comment belonging to a post.
+     *
+     * @param postId the parent post identifier
+     * @param postCommentId the comment identifier
+     * @return the matching comment
+     */
+    @GetMapping(value = "/{postCommentId}", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<PostCommentCommandResult> getComment(
+            @PathVariable @Positive Long postId, @PathVariable @Positive Long postCommentId) {
+        PostCommentCommandResult result =
+                queryService.getCommentById(new GetPostCommentQuery(postId, PostCommentId.of(postCommentId)));
+        return ResponseEntity.ok(result);
+    }
+
+    /**
+     * Creates a comment for a post.
+     *
+     * @param postId the parent post identifier
+     * @param request the comment details
+     * @return a future containing the created comment response
+     */
+    @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    public CompletableFuture<ResponseEntity<PostCommentCommandResult>> createComment(
+            @PathVariable @Positive Long postId, @RequestBody @Valid CreatePostCommentRequest request) {
+        var uriBuilder = ServletUriComponentsBuilder.fromCurrentRequest();
+        return commandService
+                .createComment(
+                        new CreatePostCommentCommand(request.title(), request.content(), postId, request.published()))
+                .thenApply(result -> {
+                    URI location = uriBuilder
+                            .path("/{postCommentId}")
+                            .buildAndExpand(result.id())
+                            .toUri();
+                    return ResponseEntity.created(location).body(result);
+                });
+    }
+
+    /**
+     * Updates a comment belonging to a post.
+     *
+     * @param postId the parent post identifier
+     * @param postCommentId the comment identifier
+     * @param request the replacement comment details
+     * @return a future containing the updated comment response
+     */
+    @PutMapping(
+            value = "/{postCommentId}",
+            consumes = MediaType.APPLICATION_JSON_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    public CompletableFuture<ResponseEntity<PostCommentCommandResult>> updateComment(
+            @PathVariable @Positive Long postId,
+            @PathVariable @Positive Long postCommentId,
+            @RequestBody @Valid UpdatePostCommentRequest request) {
+        return commandService
+                .updateComment(new UpdatePostCommentCommand(
+                        PostCommentId.of(postCommentId),
+                        postId,
+                        request.title(),
+                        request.content(),
+                        request.published()))
+                .thenApply(ResponseEntity::ok);
+    }
+
+    @DeleteMapping("/{postCommentId}")
+    public CompletableFuture<ResponseEntity<Void>> deleteComment(
+            @PathVariable @Positive Long postId, @PathVariable @Positive Long postCommentId) {
+        return commandService
+                .deleteComment(PostCommentId.of(postCommentId), postId)
+                .thenApply(v -> ResponseEntity.noContent().build());
+    }
+}

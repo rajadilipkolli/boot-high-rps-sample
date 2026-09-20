@@ -1,0 +1,150 @@
+package com.example.highrps.shared;
+
+import static org.springframework.http.HttpStatus.BAD_REQUEST;
+import static org.springframework.http.HttpStatus.CONFLICT;
+import static org.springframework.http.HttpStatus.INTERNAL_SERVER_ERROR;
+import static org.springframework.http.HttpStatus.NOT_FOUND;
+
+import java.time.Instant;
+import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.context.support.DefaultMessageSourceResolvable;
+import org.springframework.core.env.Environment;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatusCode;
+import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
+
+@RestControllerAdvice
+class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+    private final Environment environment;
+
+    GlobalExceptionHandler(Environment environment) {
+        this.environment = environment;
+    }
+
+    @Override
+    protected ResponseEntity<Object> handleMethodArgumentNotValid(
+            MethodArgumentNotValidException ex, HttpHeaders headers, HttpStatusCode status, WebRequest request) {
+        log.error("Validation error", ex);
+        var errors = ex.getAllErrors().stream()
+                .map(DefaultMessageSourceResolvable::getDefaultMessage)
+                .toList();
+
+        ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(BAD_REQUEST, ex.getMessage());
+        problemDetail.setTitle("Validation Error");
+        problemDetail.setProperty("errors", errors);
+        return ResponseEntity.status(BAD_REQUEST).body(problemDetail);
+    }
+
+    @ExceptionHandler(DomainException.class)
+    public ProblemDetail handle(DomainException e) {
+        log.info("Domain exception", e);
+        ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(BAD_REQUEST, e.getMessage());
+        problemDetail.setTitle("Bad Request");
+        problemDetail.setProperty("errors", List.of(e.getMessage()));
+        return problemDetail;
+    }
+
+    /**
+     * Unwraps an asynchronous request failure and delegates recognized causes to their direct exception handlers.
+     *
+     * @param e the asynchronous wrapper exception
+     * @return problem details for the wrapped failure
+     */
+    @ExceptionHandler({CompletionException.class, ExecutionException.class})
+    public ProblemDetail handleCompletionException(Exception e) {
+        Throwable cause = e.getCause();
+        if (cause instanceof DomainException de) {
+            return handle(de);
+        }
+        if (cause instanceof IllegalArgumentException iae) {
+            return handle(iae);
+        }
+        if (cause instanceof ResourceConflictException rce) {
+            return handle(rce);
+        }
+        if (cause instanceof ResourceNotFoundException rnfe) {
+            return handle(rnfe);
+        }
+        if (cause instanceof Exception ex) {
+            return handleUnexpected(ex);
+        }
+        return handleUnexpected(e);
+    }
+
+    /**
+     * Converts an invalid argument into an HTTP 400 problem response.
+     *
+     * @param e the invalid argument failure
+     * @return problem details containing the failure message
+     */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ProblemDetail handle(IllegalArgumentException e) {
+        log.info("Illegal argument", e);
+        ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(BAD_REQUEST, e.getMessage());
+        problemDetail.setTitle("Bad Request");
+        problemDetail.setProperty("errors", List.of(e.getMessage()));
+        return problemDetail;
+    }
+
+    /**
+     * Converts a resource conflict into an HTTP 409 problem response.
+     *
+     * @param e the conflict to report
+     * @return problem details containing the conflict message
+     */
+    @ExceptionHandler(ResourceConflictException.class)
+    public ProblemDetail handle(ResourceConflictException e) {
+        log.info("Resource conflict", e);
+        ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(CONFLICT, e.getMessage());
+        problemDetail.setTitle("Conflict");
+        problemDetail.setProperty("errors", List.of(e.getMessage()));
+        return problemDetail;
+    }
+
+    /**
+     * Converts a missing resource into an HTTP 404 problem response.
+     *
+     * @param e the missing-resource failure
+     * @return problem details containing the failure message
+     */
+    @ExceptionHandler(ResourceNotFoundException.class)
+    public ProblemDetail handle(ResourceNotFoundException e) {
+        log.debug("Resource not found: {}", e.getMessage());
+        ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(NOT_FOUND, e.getMessage());
+        problemDetail.setTitle("Resource Not Found");
+        problemDetail.setProperty("errors", List.of(e.getMessage()));
+        return problemDetail;
+    }
+
+    @ExceptionHandler(Exception.class)
+    ProblemDetail handleUnexpected(Exception e) {
+        log.error("Unexpected exception occurred", e);
+
+        // Don't expose internal details in production
+        String message = "An unexpected error occurred";
+        if (isDevelopmentMode()) {
+            message = e.getMessage();
+        }
+
+        ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(INTERNAL_SERVER_ERROR, message);
+        problemDetail.setProperty("timestamp", Instant.now());
+        return problemDetail;
+    }
+
+    private boolean isDevelopmentMode() {
+        List<String> profiles = Arrays.asList(environment.getActiveProfiles());
+        return profiles.contains("dev") || profiles.contains("local");
+    }
+}

@@ -1,0 +1,568 @@
+package com.example.highrps.post.api;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
+
+import com.example.highrps.author.domain.AuthorEntity;
+import com.example.highrps.common.AbstractIntegrationTest;
+import com.example.highrps.infrastructure.kafka.batch.ScheduledBatchProcessor;
+import com.example.highrps.post.command.PostCommandResult;
+import com.example.highrps.post.domain.PostDetailsResponse;
+import com.example.highrps.post.domain.PostRedis;
+import com.example.highrps.post.query.PostProjection;
+import com.example.highrps.shared.IdGenerator;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+
+class PostControllerIT extends AbstractIntegrationTest {
+
+    @BeforeEach
+    void setUp() {
+        super.clearDatabase();
+    }
+
+    /**
+     * Verifies that the post creation endpoint persists a post.
+     */
+    @Test
+    void createPost() {
+        var result = mockMvcTester
+                .post()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .content("""
+                        {
+                          "title": "High RPS with Spring Boot",
+                          "content": "This is a sample post content.",
+                          "email": "junit@email.com",
+                          "details": {
+                            "detailsKey": "This is a summary",
+                            "createdBy": "JunitIteration"
+                          }
+                        }
+                        """)
+                .uri("/api/posts")
+                .contentType(MediaType.APPLICATION_JSON)
+                .exchange();
+
+        result.assertThat()
+                .hasStatus(HttpStatus.CREATED)
+                .hasContentType(MediaType.APPLICATION_JSON)
+                .containsHeader("Location");
+
+        String location = result.getResponse().getHeader("Location");
+        Long postId = Long.parseLong(location.substring(location.lastIndexOf('/') + 1));
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            mockMvcTester
+                    .get()
+                    .uri("/api/posts/{postId}", postId)
+                    .exchange()
+                    .assertThat()
+                    .hasStatus(HttpStatus.OK);
+        });
+    }
+
+    @Test
+    void getPostByPostIdNotFound() {
+        mockMvcTester
+                .get()
+                .uri("/api/posts/{postId}", 999999L)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.NOT_FOUND)
+                .hasContentType(MediaType.APPLICATION_PROBLEM_JSON);
+    }
+
+    /**
+     * Verifies the complete post API lifecycle.
+     */
+    @Test
+    void crudPostResourcesAPICheck() {
+        String title = "sample-post";
+        String email = "test1@local.com";
+
+        authorRepository.save(new AuthorEntity()
+                .setEmail(email)
+                .setFirstName("FirstName")
+                .setLastName("LastName")
+                .setMobile(9876543210L));
+
+        // 1) Create a post
+        AtomicReference<Long> postId = new AtomicReference<>();
+        mockMvcTester
+                .post()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .uri("/api/posts")
+                .content("""
+          {
+            "title": "sample-post",
+            "content": "Will be deleted later",
+            "email": "test1@local.com",
+            "details": {
+                "detailsKey": "This is a summary",
+                "createdBy": "JunitIteration"
+            }
+          }
+          """)
+                .contentType(MediaType.APPLICATION_JSON)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.CREATED)
+                .apply(result -> {
+                    String location = result.getResponse().getHeader("Location");
+                    assertThat(location).isNotNull();
+                    assertThat(location).contains("/api/posts/");
+                    postId.set(Long.valueOf(location.substring(location.lastIndexOf("/") + 1)));
+                });
+
+        // Ensure caches/redis are populated by hitting GET (which populates local cache and redis)
+        mockMvcTester
+                .get()
+                .uri("/api/posts/{postId}", postId.get())
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.OK)
+                .hasContentType(MediaType.APPLICATION_JSON)
+                .bodyJson()
+                .convertTo(PostProjection.class)
+                .satisfies(postResponse -> {
+                    assertThat(postResponse.postId()).isEqualTo(postId.get());
+                    assertThat(postResponse.title()).isEqualTo(title);
+                    assertThat(postResponse.content()).isEqualTo("Will be deleted later");
+                    assertThat(postResponse.published()).isFalse();
+                    assertThat(postResponse.publishedAt()).isNull();
+                    assertThat(postResponse.createdAt()).isNotNull().isInstanceOf(LocalDateTime.class);
+                    assertThat(postResponse.modifiedAt()).isNull();
+                    assertThat(postResponse.tags()).isEmpty();
+                    assertThat(postResponse.details()).isNotNull();
+                    assertThat(postResponse.details().detailsKey()).isEqualTo("This is a summary");
+                    assertThat(postResponse.details().createdBy()).isEqualTo("JunitIteration");
+                });
+
+        // Assert local cache and redis have the key
+        String cacheKey = String.valueOf(postId.get());
+        String cached = localCache.getIfPresent(cacheKey);
+        assertThat(cached).isNotNull();
+        // Redis may be populated synchronously or asynchronously depending on timing and listener implementation.
+        // Make the test robust by awaiting eventual consistency.
+        await().atMost(Duration.ofSeconds(45))
+                .pollInterval(Duration.ofSeconds(1))
+                .untilAsserted(() -> {
+                    PostRedis value = postRedisRepository.findById(postId.get()).orElse(null);
+                    assertThat(value).isNotNull();
+                    assertThat(value.getContent()).isEqualTo("Will be deleted later");
+                    assertThat(value.isPublished()).isFalse();
+                    assertThat(value.getPublishedAt()).isNull();
+                    assertThat(value.getCreatedAt()).isNotNull().isInstanceOf(LocalDateTime.class);
+                    assertThat(value.getModifiedAt()).isNull();
+                });
+
+        // 2) Update the post via the new PUT endpoint to change content
+        mockMvcTester
+                .put()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .uri("/api/posts/" + postId.get())
+                .content("""
+                        {
+                            "postId": %d,
+                            "title": "sample-post",
+                            "content": "Updated content before delete",
+                            "email": "test1@local.com",
+                            "published": true,
+                            "details": {
+                                "detailsKey": "This is a summary",
+                                "createdBy": "Some additional info"
+                            }
+                        }
+                        """.formatted(postId.get()))
+                .contentType(MediaType.APPLICATION_JSON)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.OK)
+                .bodyJson()
+                .convertTo(PostCommandResult.class)
+                .satisfies(resp -> {
+                    assertThat(resp.content()).isEqualTo("Updated content before delete");
+                    assertThat(resp.modifiedAt()).isNotNull().isInstanceOf(LocalDateTime.class);
+                });
+
+        // Verify caches updated with new content
+        String cachedAfter = localCache.getIfPresent(cacheKey);
+        assertThat(cachedAfter).isNotNull();
+        assertThat(cachedAfter).contains("Updated content before delete");
+        // Redis may be updated asynchronously via Kafka; await the updated aggregate.
+        await().atMost(Duration.ofSeconds(45))
+                .pollInterval(Duration.ofSeconds(1))
+                .untilAsserted(() -> {
+                    PostRedis value = postRedisRepository.findById(postId.get()).orElse(null);
+                    assertThat(value).isNotNull();
+                    assertThat(value.getContent()).isEqualTo("Updated content before delete");
+                    assertThat(value.isPublished()).isTrue();
+                    assertThat(value.getPublishedAt()).isNotNull().isInstanceOf(LocalDateTime.class);
+                    assertThat(value.getCreatedAt()).isNotNull().isInstanceOf(LocalDateTime.class);
+                    assertThat(value.getModifiedAt()).isNotNull().isInstanceOf(LocalDateTime.class);
+                    assertThat(value.getModifiedAt()).isAfter(value.getCreatedAt());
+                });
+
+        // 3) Delete the post
+        mockMvcTester
+                .delete()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .uri("/api/posts/{postId}", postId.get())
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.NO_CONTENT);
+
+        // 4) Subsequent GET should return 404 immediately due to synchronous cache invalidation and tombstone marker
+        mockMvcTester
+                .get()
+                .uri("/api/posts/{postId}", postId.get())
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.NOT_FOUND)
+                .hasContentType(MediaType.APPLICATION_PROBLEM_JSON);
+
+        // Wait for deletion to propagate (DB entry removed, redis key removed, local cache invalidated)
+        await().atMost(Duration.ofSeconds(60))
+                .pollInterval(Duration.ofSeconds(1))
+                .untilAsserted(() -> {
+                    assertThat(postRepository.existsByPostRefId(postId.get())).isFalse();
+                    assertThat(postRedisRepository.existsById(postId.get())).isFalse();
+                    assertThat(localCache.getIfPresent(cacheKey)).isNull();
+                });
+
+        // Also assert local cache and redis no longer have the key
+        assertThat(localCache.getIfPresent(cacheKey)).isNull();
+    }
+
+    /**
+     * Verifies post mutations are reflected in stream and cache state.
+     */
+    @Test
+    void crudPostResourcesWithStateCheck() {
+        String title = "delete-me";
+        String email = "test@local.com";
+
+        AuthorEntity entity = new AuthorEntity()
+                .setEmail(email)
+                .setFirstName("FirstName")
+                .setLastName("LastName")
+                .setMobile(9876543210L);
+        entity.setCreatedAt(LocalDateTime.now());
+        authorRepository.save(entity);
+
+        // 1) Create a post
+        AtomicReference<Long> postId = new AtomicReference<>();
+        mockMvcTester
+                .post()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .uri("/api/posts")
+                .content("""
+          {
+            "title": "delete-me",
+            "content": "Will be deleted",
+            "email": "test@local.com",
+            "published": false,
+            "publishedAt": null,
+            "details": {
+                "detailsKey": "This is a summary",
+                "createdBy": "JunitIteration"
+            },
+            "tags": [
+               {
+                 "tagName": "java",
+                 "tagDescription": "beautiful programming language"
+               },
+               {
+                 "tagName": "spring",
+                 "tagDescription": "the best framework"
+               }
+             ]
+          }
+          """)
+                .contentType(MediaType.APPLICATION_JSON)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.CREATED)
+                .apply(result -> {
+                    String location = result.getResponse().getHeader("Location");
+                    assertThat(location).isNotNull();
+                    assertThat(location).contains("/api/posts/");
+                    postId.set(Long.valueOf(location.substring(location.lastIndexOf("/") + 1)));
+                });
+
+        // Ensure caches/redis are populated by hitting GET (which populates local cache and redis)
+        mockMvcTester
+                .get()
+                .uri("/api/posts/{postId}", postId.get())
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.OK)
+                .hasContentType(MediaType.APPLICATION_JSON)
+                .bodyJson()
+                .convertTo(PostProjection.class)
+                .satisfies(postResponse -> {
+                    assertThat(postResponse.postId()).isEqualTo(postId.get());
+                    assertThat(postResponse.title()).isEqualTo(title);
+                    assertThat(postResponse.content()).isEqualTo("Will be deleted");
+                    assertThat(postResponse.published()).isFalse();
+                    assertThat(postResponse.publishedAt()).isNull();
+                    assertThat(postResponse.tags()).isNotEmpty().hasSize(2);
+                    PostDetailsResponse details = postResponse.details();
+                    assertThat(details).isNotNull();
+                    assertThat(details.detailsKey()).isEqualTo("This is a summary");
+                    assertThat(details.createdBy()).isEqualTo("JunitIteration");
+                });
+
+        // Assert local cache and redis have the cacheKey
+        String cacheKey = String.valueOf(postId.get());
+        String cached = localCache.getIfPresent(cacheKey);
+        assertThat(cached).isNotNull();
+        // as redis will take a short moment to be populated due to async nature, it should go through kafka and in
+        // AggregatesToRedisListener value is set
+        await().atMost(Duration.ofSeconds(45))
+                .pollInterval(Duration.ofSeconds(1))
+                .untilAsserted(() ->
+                        assertThat(postRedisRepository.findById(postId.get())).isPresent());
+
+        await().atMost(Duration.ofSeconds(30))
+                .pollInterval(Duration.ofSeconds(1))
+                .untilAsserted(() -> {
+                    scheduledBatchProcessors.forEach(ScheduledBatchProcessor::processBatch);
+                    assertThat(postRepository.existsByPostRefId(postId.get())).isTrue();
+                    assertThat(tagRepository.count()).isEqualTo(2);
+                    assertThat(postTagRepository.countByPostEntity_Title(title)).isEqualTo(2);
+                });
+
+        // 2) Update the post via the new PUT endpoint to change content
+        mockMvcTester
+                .put()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .uri("/api/posts/{postId}", postId.get())
+                .content("""
+                        {
+                          "postId": %d,
+                          "title": "%s",
+                          "content": "Updated content before delete",
+                          "email": "test@local.com",
+                          "published": true,
+                          "details": {
+                            "detailsKey": "This is a summary",
+                            "createdBy": "JunitIteration"
+                          }
+                        }
+                        """.formatted(postId.get(), title))
+                .contentType(MediaType.APPLICATION_JSON)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.OK)
+                .bodyJson()
+                .convertTo(PostCommandResult.class)
+                .satisfies(postResponse -> {
+                    assertThat(postResponse.content()).isEqualTo("Updated content before delete");
+                    assertThat(postResponse.published()).isTrue();
+                    assertThat(postResponse.publishedAt()).isNotNull();
+                });
+
+        await().atMost(Duration.ofSeconds(30))
+                .pollInterval(Duration.ofSeconds(1))
+                .untilAsserted(() -> {
+                    scheduledBatchProcessors.forEach(ScheduledBatchProcessor::processBatch);
+                    assertThat(postRepository.existsByPostRefId(postId.get())).isTrue();
+                    assertThat(tagRepository.count()).isEqualTo(2);
+                    assertThat(postTagRepository.countByPostEntity_Title(title)).isEqualTo(2);
+                });
+
+        // Verify caches updated with new content
+        String cachedAfter = localCache.getIfPresent(cacheKey);
+        assertThat(cachedAfter).isNotNull();
+        assertThat(cachedAfter).contains("Updated content before delete");
+        // as redis will take a short moment to be populated due to async nature, it should go through kafka and in
+        // AggregatesToRedisListener value is set
+        await().atMost(Duration.ofSeconds(45))
+                .pollInterval(Duration.ofSeconds(1))
+                .untilAsserted(() -> {
+                    PostRedis value = postRedisRepository.findById(postId.get()).orElse(null);
+                    assertThat(value).isNotNull();
+                    assertThat(value.getContent()).isEqualTo("Updated content before delete");
+                });
+
+        // 3) Delete the post
+        mockMvcTester
+                .delete()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .uri("/api/posts/{postId}", postId.get())
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.NO_CONTENT);
+
+        // 4) Subsequent GET should return 404 immediately due to synchronous cache invalidation and tombstone marker
+        mockMvcTester
+                .get()
+                .uri("/api/posts/{postId}", postId.get())
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.NOT_FOUND)
+                .hasContentType(MediaType.APPLICATION_PROBLEM_JSON);
+
+        // Wait for asynchronous tombstone processing to complete: DB row removed, post-tag relations cleared, and redis
+        // cacheKey removed
+        await().atMost(Duration.ofSeconds(60))
+                .pollInterval(Duration.ofSeconds(1))
+                .untilAsserted(() -> {
+                    scheduledBatchProcessors.forEach(ScheduledBatchProcessor::processBatch);
+                    assertThat(postRepository.existsByPostRefId(postId.get())).isFalse();
+                    assertThat(postTagRepository.countByPostEntity_Title(title)).isEqualTo(0);
+                });
+
+        // Ensure tags themselves are still present (should be 2)
+        assertThat(tagRepository.count()).isEqualTo(2);
+
+        // Also assert local cache and redis no longer have the cacheKey
+        assertThat(localCache.getIfPresent(cacheKey)).isNull();
+        assertThat(postRedisRepository.existsById(postId.get())).isFalse();
+    }
+
+    /**
+     * Verifies post reads fall back to Kafka Streams after cache misses.
+     */
+    @org.junit.jupiter.api.Disabled("Kafka streams removed")
+    @Test
+    void shouldFallbackToKafkaStreamsWhenCachesAreMissed() {
+        AuthorEntity entity = new AuthorEntity()
+                .setEmail("kafka@local.com")
+                .setFirstName("Kafka")
+                .setLastName("Streams")
+                .setMobile(1234567890L);
+        entity.setCreatedAt(LocalDateTime.now());
+        authorRepository.save(entity);
+
+        // 1) Create a post
+        AtomicReference<Long> postId = new AtomicReference<>();
+        mockMvcTester
+                .post()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .uri("/api/posts")
+                .content("""
+                        {
+                          "title": "Kafka Streams Fallback",
+                          "content": "This should be retrieved from Kafka Streams",
+                          "email": "kafka@local.com",
+                          "published": true,
+                          "details": {
+                              "detailsKey": "Test details",
+                              "createdBy": "Test runner"
+                          }
+                        }
+                        """)
+                .contentType(MediaType.APPLICATION_JSON)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.CREATED)
+                .bodyJson()
+                .convertTo(PostCommandResult.class)
+                .satisfies(postResponse -> postId.set(postResponse.postId()));
+
+        String cacheKey = String.valueOf(postId.get());
+
+        // Wait for it to be fully processed by Kafka Streams and written to Redis
+        await().atMost(Duration.ofSeconds(45))
+                .pollInterval(Duration.ofSeconds(1))
+                .untilAsserted(() ->
+                        assertThat(postRedisRepository.findById(postId.get())).isPresent());
+
+        // 2) Clear local cache and Redis
+        localCache.invalidate(cacheKey);
+        postRedisRepository.deleteById(postId.get());
+
+        // Assert caches are cleared
+        assertThat(localCache.getIfPresent(cacheKey)).isNull();
+        assertThat(postRedisRepository.findById(postId.get())).isEmpty();
+        // 3) GET request should fall back to Kafka Streams and succeed
+        mockMvcTester
+                .get()
+                .uri("/api/posts/{postId}", postId.get())
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.OK)
+                .hasContentType(MediaType.APPLICATION_JSON)
+                .bodyJson()
+                .convertTo(PostProjection.class)
+                .satisfies(postResponse -> {
+                    assertThat(postResponse.postId()).isEqualTo(postId.get());
+                    assertThat(postResponse.title()).isEqualTo("Kafka Streams Fallback");
+                });
+
+        // 4) Assert Redis is populated again by the fallback warm-up logic
+        await().atMost(Duration.ofSeconds(10))
+                .pollInterval(Duration.ofMillis(500))
+                .untilAsserted(() ->
+                        assertThat(postRedisRepository.findById(postId.get())).isPresent());
+
+        // Assert local cache is also populated
+        assertThat(localCache.getIfPresent(cacheKey)).isNotNull();
+    }
+
+    /**
+     * Verifies duplicate post identifiers produce a conflict response.
+     */
+    @Test
+    @DisplayName("Should reject duplicate post creation with same postId")
+    void testShouldRejectDuplicatePost() {
+        Long duplicatePostId = IdGenerator.generateLong();
+
+        // Create initial post
+        mockMvcTester
+                .post()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .uri("/api/posts")
+                .content("""
+                        {
+                            "postId": %d,
+                            "title": "First Post",
+                            "content": "Initial content",
+                            "email": "author@example.com",
+                            "published": true,
+                            "details": {
+                                "detailsKey": "key1",
+                                "createdBy": "user1"
+                            }
+                        }
+                        """.formatted(duplicatePostId))
+                .contentType(MediaType.APPLICATION_JSON)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.CREATED);
+
+        // Attempt to create duplicate post
+        mockMvcTester
+                .post()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .uri("/api/posts")
+                .content("""
+                        {
+                            "postId": %d,
+                            "title": "Duplicate Post",
+                            "content": "Duplicate content",
+                            "email": "author@example.com",
+                            "published": true,
+                            "details": {
+                                "detailsKey": "key1",
+                                "createdBy": "user1"
+                            }
+                        }
+                        """.formatted(duplicatePostId))
+                .contentType(MediaType.APPLICATION_JSON)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.CONFLICT)
+                .hasContentType(MediaType.APPLICATION_PROBLEM_JSON);
+    }
+}

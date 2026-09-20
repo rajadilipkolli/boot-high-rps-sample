@@ -1,0 +1,224 @@
+package com.example.highrps.author.command;
+
+import com.example.highrps.author.domain.AuthorRedis;
+import com.example.highrps.author.domain.AuthorRedisRepository;
+import com.example.highrps.author.domain.events.AuthorCreatedEvent;
+import com.example.highrps.author.domain.events.AuthorDeletedEvent;
+import com.example.highrps.author.domain.events.AuthorUpdatedEvent;
+import com.example.highrps.author.query.AuthorProjection;
+import com.example.highrps.author.query.AuthorQuery;
+import com.example.highrps.author.query.AuthorQueryService;
+import com.example.highrps.shared.AbstractCommandService;
+import com.example.highrps.shared.ResourceConflictException;
+import com.example.highrps.shared.ResourceNotFoundException;
+import com.example.highrps.shared.config.AppProperties;
+import com.example.highrps.shared.redis.DeletionMarkerHandler;
+import com.github.benmanes.caffeine.cache.Cache;
+import java.time.Duration;
+import java.util.Locale;
+import java.util.concurrent.CompletableFuture;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.stereotype.Service;
+import tools.jackson.databind.json.JsonMapper;
+
+/**
+ * Command service for Author aggregate.
+ * Handles all write operations and publishes domain events.
+ */
+@Service
+public class AuthorCommandService extends AbstractCommandService {
+
+    private static final Logger log = LoggerFactory.getLogger(AuthorCommandService.class);
+
+    private final Cache<String, String> localCache;
+    private final DeletionMarkerHandler deletionMarkerHandler;
+    private final AuthorQueryService authorQueryService;
+    private final RedisTemplate<String, String> redisTemplate;
+    private final AuthorRedisRepository authorRedisRepository;
+
+    /**
+     * Creates an author command service with its event, cache, and persistence collaborators.
+     *
+     * @param kafkaTemplate publisher for author events
+     * @param localCache local author cache
+     * @param deletionMarkerHandler handler for deleted aggregates
+     * @param authorQueryService author read service
+     * @param redisTemplate Redis operations used for reservations
+     * @param authorRedisRepository Redis author repository
+     * @param appProperties application configuration
+     */
+    public AuthorCommandService(
+            RedisTemplate<String, String> redisTemplate,
+            JsonMapper jsonMapper,
+            Cache<String, String> localCache,
+            DeletionMarkerHandler deletionMarkerHandler,
+            AuthorQueryService authorQueryService,
+            AuthorRedisRepository authorRedisRepository,
+            AppProperties appProperties) {
+        super(redisTemplate, jsonMapper, appProperties);
+        this.localCache = localCache;
+        this.deletionMarkerHandler = deletionMarkerHandler;
+        this.authorQueryService = authorQueryService;
+        this.redisTemplate = redisTemplate;
+        this.authorRedisRepository = authorRedisRepository;
+    }
+
+    /**
+     * Creates an author and publishes its creation event, using a lowercase email as the aggregate key.
+     *
+     * @param cmd the author data to create
+     * @return a future completed with the created author after the event is published
+     * @throws ResourceConflictException if the email is already reserved or is detected in the read model
+     */
+    public CompletableFuture<AuthorCommandResult> createAuthor(CreateAuthorCommand cmd) {
+        String aggregateKey = cmd.email().toLowerCase(Locale.ROOT);
+
+        String reservationKey = "reservation:author:" + aggregateKey;
+        // Acquire an atomic distributed reservation to prevent concurrent duplicate creations
+        Boolean acquired = redisTemplate.opsForValue().setIfAbsent(reservationKey, "1", Duration.ofMinutes(5));
+
+        if (Boolean.FALSE.equals(acquired)) {
+            throw new ResourceConflictException("Author already exists with email: " + cmd.email());
+        }
+
+        // Validate author doesn't already exist in the read model as a fallback
+        boolean exists = false;
+        try {
+            exists = authorQueryService.exists(aggregateKey);
+        } catch (Exception e) {
+            log.warn(
+                    "Could not verify if author exists (query service unavailable). Relying on distributed reservation.",
+                    e);
+        }
+
+        if (exists) {
+            throw new ResourceConflictException("Author already exists with email: " + cmd.email());
+        }
+
+        // Publish domain event directly to Kafka
+        AuthorCreatedEvent event = new AuthorCreatedEvent(
+                aggregateKey, cmd.firstName(), cmd.middleName(), cmd.lastName(), cmd.mobile(), cmd.createdAt());
+        // Build result
+        AuthorCommandResult result = new AuthorCommandResult(
+                aggregateKey, cmd.firstName(), cmd.middleName(), cmd.lastName(), cmd.mobile(), cmd.createdAt(), null);
+
+        return executeCommand(
+                        "author",
+                        aggregateKey,
+                        aggregateKey,
+                        event,
+                        result,
+                        () -> updateCaches(aggregateKey, result),
+                        "create author",
+                        "Author")
+                .whenComplete((res, err) -> {
+                    if (err != null && !isPendingPublishFailure(err)) {
+                        try {
+                            redisTemplate.delete(reservationKey);
+                        } catch (Exception e) {
+                            log.warn(
+                                    "Failed to clean up reservation key after creation failure: {}", reservationKey, e);
+                        }
+                    }
+                });
+    }
+
+    public CompletableFuture<AuthorCommandResult> updateAuthor(UpdateAuthorCommand cmd) {
+        String aggregateKey = cmd.email().toLowerCase(Locale.ROOT);
+
+        AuthorQuery authorQuery = new AuthorQuery(aggregateKey);
+
+        AuthorProjection author = authorQueryService.getAuthor(authorQuery);
+
+        // Validate author exists
+        if (author == null) {
+            throw new ResourceNotFoundException("Author not found with id: " + cmd.email());
+        }
+
+        // Publish domain event
+        AuthorUpdatedEvent event = new AuthorUpdatedEvent(
+                aggregateKey,
+                cmd.firstName(),
+                cmd.middleName(),
+                cmd.lastName(),
+                cmd.mobile(),
+                author.createdAt(),
+                cmd.modifiedAt());
+        // Build result
+        AuthorCommandResult result = new AuthorCommandResult(
+                aggregateKey,
+                cmd.firstName(),
+                cmd.middleName(),
+                cmd.lastName(),
+                cmd.mobile(),
+                author.createdAt(),
+                cmd.modifiedAt());
+
+        return executeCommand(
+                "author",
+                aggregateKey,
+                aggregateKey,
+                event,
+                result,
+                () -> updateCaches(aggregateKey, result),
+                "update author",
+                "Author");
+    }
+
+    public CompletableFuture<Void> deleteAuthor(String email) {
+        String aggregateKey = email.toLowerCase(Locale.ROOT);
+        log.info("Deleting author with email: {}", aggregateKey);
+
+        // 1. Publish tombstone event
+        return executeCommand(
+                "author",
+                aggregateKey,
+                aggregateKey,
+                new AuthorDeletedEvent(aggregateKey),
+                null, // Void result
+                () -> {
+                    // 2. Invalidate local cache
+                    try {
+                        localCache.invalidate(aggregateKey);
+                    } catch (Exception e) {
+                        log.warn("Failed to invalidate local cache for email: {}", aggregateKey, e);
+                    }
+                    // 3. Mark deleted in Redis with TTL (prevents batch re-insertion)
+                    try {
+                        deletionMarkerHandler.markDeleted(DeletionMarkerHandler.AUTHOR, aggregateKey);
+                    } catch (Exception e) {
+                        log.warn("Failed to mark author deleted in Redis: {}", aggregateKey, e);
+                    }
+                },
+                "delete author",
+                "Author");
+    }
+
+    private void updateCaches(String aggregateKey, AuthorCommandResult result) {
+
+        // Update local cache
+        try {
+            localCache.invalidate(aggregateKey);
+        } catch (Exception e) {
+            log.warn("Failed to update local cache for email: {}", aggregateKey, e);
+        }
+
+        // Update Redis synchronously for guaranteed read-your-writes
+        try {
+            AuthorRedis redisEntity = new AuthorRedis()
+                    .setEmail(result.email())
+                    .setFirstName(result.firstName())
+                    .setMiddleName(result.middleName())
+                    .setLastName(result.lastName())
+                    .setMobile(result.mobile());
+            redisEntity.setCreatedAt(result.createdAt());
+            redisEntity.setModifiedAt(result.modifiedAt());
+            authorRedisRepository.save(redisEntity);
+            log.debug("Synchronously updated Redis for author: {}", aggregateKey);
+        } catch (Exception e) {
+            log.error("Failed to synchronously update Redis for author: {}", aggregateKey, e);
+        }
+    }
+}
