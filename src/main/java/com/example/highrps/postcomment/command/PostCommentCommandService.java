@@ -1,0 +1,268 @@
+package com.example.highrps.postcomment.command;
+
+import com.example.highrps.infrastructure.cache.CacheKeyGenerator;
+import com.example.highrps.post.query.PostQueryService;
+import com.example.highrps.postcomment.domain.PostCommentMapper;
+import com.example.highrps.postcomment.domain.PostCommentRedis;
+import com.example.highrps.postcomment.domain.PostCommentRedisRepository;
+import com.example.highrps.postcomment.domain.PostCommentRequest;
+import com.example.highrps.postcomment.domain.events.PostCommentCreatedEvent;
+import com.example.highrps.postcomment.domain.events.PostCommentDeletedEvent;
+import com.example.highrps.postcomment.domain.events.PostCommentUpdatedEvent;
+import com.example.highrps.postcomment.domain.vo.PostCommentId;
+import com.example.highrps.postcomment.query.GetPostCommentQuery;
+import com.example.highrps.postcomment.query.PostCommentQueryService;
+import com.example.highrps.shared.AbstractCommandService;
+import com.example.highrps.shared.AggregateOperationQueue;
+import com.example.highrps.shared.IdGenerator;
+import com.example.highrps.shared.ResourceConflictException;
+import com.example.highrps.shared.ResourceNotFoundException;
+import com.example.highrps.shared.config.AppProperties;
+import com.example.highrps.shared.redis.DeletionMarkerHandler;
+import com.github.benmanes.caffeine.cache.Cache;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import java.time.Duration;
+import java.time.ZoneOffset;
+import java.util.concurrent.CompletableFuture;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.stereotype.Service;
+import tools.jackson.databind.json.JsonMapper;
+
+/**
+ * Command service for PostComment aggregate.
+ * Handles all write operations and publishes domain events.
+ */
+@Service
+public class PostCommentCommandService extends AbstractCommandService {
+
+    private static final Logger log = LoggerFactory.getLogger(PostCommentCommandService.class);
+
+    private final PostQueryService postQueryService;
+    private final PostCommentQueryService postCommentQueryService;
+    private final Cache<String, String> localCache;
+    private final PostCommentMapper postCommentMapper;
+    private final Counter eventsPublishedCounter;
+    private final Counter tombstonesPublishedCounter;
+    private final DeletionMarkerHandler deletionMarkerHandler;
+    private final PostCommentRedisRepository postCommentRedisRepository;
+    private final RedisTemplate<String, String> redisTemplate;
+    private final AggregateOperationQueue redisWriteQueue = new AggregateOperationQueue();
+
+    /**
+     * Creates a comment command service with its event, cache, and persistence collaborators.
+     *
+     * @param postQueryService post read service
+     * @param postCommentQueryService comment read service
+     * @param kafkaTemplate publisher for comment events
+     * @param localCache local comment cache
+     * @param postCommentMapper comment mapper
+     * @param meterRegistry metrics registry
+     * @param deletionMarkerHandler handler for deleted aggregates
+     * @param postCommentRedisRepository Redis comment repository
+     * @param appProperties application configuration
+     * @param redisTemplate Redis operations used for reservations
+     */
+    public PostCommentCommandService(
+            PostQueryService postQueryService,
+            PostCommentQueryService postCommentQueryService,
+            RedisTemplate<String, String> redisTemplate,
+            JsonMapper jsonMapper,
+            Cache<String, String> localCache,
+            PostCommentMapper postCommentMapper,
+            MeterRegistry meterRegistry,
+            DeletionMarkerHandler deletionMarkerHandler,
+            PostCommentRedisRepository postCommentRedisRepository,
+            AppProperties appProperties) {
+        super(redisTemplate, jsonMapper, appProperties);
+        this.postQueryService = postQueryService;
+        this.postCommentQueryService = postCommentQueryService;
+        this.localCache = localCache;
+        this.postCommentMapper = postCommentMapper;
+        this.deletionMarkerHandler = deletionMarkerHandler;
+        this.postCommentRedisRepository = postCommentRedisRepository;
+        this.redisTemplate = redisTemplate;
+        this.eventsPublishedCounter = Counter.builder("post-comments.events.published")
+                .description("Number of post comment events published")
+                .register(meterRegistry);
+        this.tombstonesPublishedCounter = Counter.builder("post-comments.tombstones.published")
+                .description("Number of post comment tombstone events published")
+                .register(meterRegistry);
+    }
+
+    /**
+     * Creates a comment for an existing post and publishes its creation event.
+     *
+     * @param cmd the comment data and parent post ID
+     * @return a future completed with the created comment after the event is published
+     * @throws ResourceNotFoundException if the parent post cannot be found
+     * @throws ResourceConflictException if the post and comment title are already reserved
+     */
+    public CompletableFuture<PostCommentCommandResult> createComment(CreatePostCommentCommand cmd) {
+        // Validate post exists
+        if (!postQueryService.exists(cmd.postId())) {
+            throw new ResourceNotFoundException("Post not found with id: " + cmd.postId());
+        }
+
+        String reservationKey = "reservation:postcomment:" + cmd.postId() + ":" + cmd.title();
+        Boolean acquired = redisTemplate.opsForValue().setIfAbsent(reservationKey, "1", Duration.ofMinutes(5));
+
+        if (Boolean.FALSE.equals(acquired)) {
+            throw new ResourceConflictException(
+                    "Comment already exists with title: " + cmd.title() + " for post: " + cmd.postId());
+        }
+
+        Long commentId = IdGenerator.generateLong();
+
+        // Build result and populate event
+        PostCommentRequest request = PostCommentRequest.fromCreateCmd(cmd, commentId);
+        PostCommentCreatedEvent event = new PostCommentCreatedEvent(
+                commentId,
+                cmd.postId(),
+                cmd.title(),
+                cmd.content(),
+                cmd.published(),
+                request.publishedAt(),
+                request.createdAt().atOffset(ZoneOffset.UTC));
+        // Build result
+        PostCommentCommandResult result = postCommentMapper.toResultFromRequest(request);
+
+        return executeCommand(
+                        "post-comment",
+                        String.valueOf(commentId),
+                        CacheKeyGenerator.generatePostCommentKey(cmd.postId(), commentId),
+                        event,
+                        result,
+                        () -> {
+                            updateCaches(cmd.postId(), commentId, result).join();
+                            eventsPublishedCounter.increment();
+                        },
+                        "create post comment",
+                        "PostComment")
+                .whenComplete((_, err) -> {
+                    if (err != null && !isPendingPublishFailure(err)) {
+                        try {
+                            redisTemplate.delete(reservationKey);
+                        } catch (Exception e) {
+                            log.warn(
+                                    "Failed to clean up reservation key after creation failure: {}", reservationKey, e);
+                        }
+                    }
+                });
+    }
+
+    /**
+     * Update a comment with event-driven pattern.
+     */
+    public CompletableFuture<PostCommentCommandResult> updateComment(UpdatePostCommentCommand cmd) {
+        // Validate comment exists
+        PostCommentCommandResult existing =
+                postCommentQueryService.getCommentById(new GetPostCommentQuery(cmd.postId(), cmd.commentId()));
+
+        // Build request and populate event
+        PostCommentRequest request = PostCommentRequest.fromUpdateCmd(cmd, existing.createdAt());
+        PostCommentUpdatedEvent event = new PostCommentUpdatedEvent(
+                cmd.commentId().id(),
+                cmd.postId(),
+                cmd.title(),
+                cmd.content(),
+                cmd.published(),
+                request.publishedAt(),
+                request.createdAt(),
+                request.modifiedAt());
+        // Build result
+        PostCommentCommandResult result = postCommentMapper.toResultFromRequest(request);
+
+        return executeCommand(
+                "post-comment",
+                String.valueOf(cmd.commentId().id()),
+                CacheKeyGenerator.generatePostCommentKey(
+                        cmd.postId(), cmd.commentId().id()),
+                event,
+                result,
+                () -> {
+                    updateCaches(cmd.postId(), cmd.commentId().id(), result).join();
+                    eventsPublishedCounter.increment();
+                },
+                "update post comment",
+                "PostComment");
+    }
+
+    /**
+     * Delete a comment with event-driven pattern.
+     */
+    public CompletableFuture<Void> deleteComment(PostCommentId commentId, Long postId) {
+        var cacheKey = CacheKeyGenerator.generatePostCommentKey(postId, commentId.id());
+
+        // 1. Publish tombstone event
+        return executeCommand(
+                "post-comment",
+                String.valueOf(commentId.id()),
+                cacheKey,
+                new PostCommentDeletedEvent(commentId.id(), postId),
+                null, // Void result
+                () -> {
+                    tombstonesPublishedCounter.increment();
+                    // 2. Invalidate local cache
+                    try {
+                        localCache.invalidate(cacheKey);
+                    } catch (Exception e) {
+                        log.warn("Failed to invalidate local cache for comment: {}", commentId.id(), e);
+                    }
+                    // 3. Queue the marker behind pending Redis writes and wait for the deletion barrier
+                    redisWriteQueue
+                            .enqueue(cacheKey, () -> {
+                                deletionMarkerHandler.markDeleted(DeletionMarkerHandler.POST_COMMENT, cacheKey);
+                                return CompletableFuture.completedFuture(null);
+                            })
+                            .join();
+                },
+                "delete post comment",
+                "PostComment");
+    }
+
+    /**
+     * Attempts to update the local read cache immediately, then schedules a best-effort Redis update.
+     * Cache write failures are logged without being propagated to the command result.
+     *
+     * @param postId the parent post identifier
+     * @param commentId the comment identifier
+     * @param result the current comment state
+     */
+    private CompletableFuture<Void> updateCaches(Long postId, Long commentId, PostCommentCommandResult result) {
+        String cacheKey = CacheKeyGenerator.generatePostCommentKey(postId, commentId);
+
+        // Update local cache
+        try {
+            localCache.invalidate(cacheKey);
+        } catch (Exception e) {
+            log.warn("Failed to update local cache for comment: {}", commentId, e);
+        }
+
+        // Update Redis asynchronously to avoid blocking the hot path
+        return redisWriteQueue.enqueue(cacheKey, () -> {
+            try {
+                PostCommentRedis redisEntity = new PostCommentRedis()
+                        .setCommentId(String.valueOf(commentId))
+                        .setTitle(result.title())
+                        .setContent(result.content())
+                        .setPublished(result.published())
+                        .setPublishedAt(result.publishedAt())
+                        .setPostId(postId);
+                redisEntity.setCreatedAt(result.createdAt());
+                redisEntity.setModifiedAt(result.modifiedAt());
+                if (deletionMarkerHandler.isDeleted(DeletionMarkerHandler.POST_COMMENT, cacheKey)) {
+                    log.debug("Skipping Redis update for deleted post comment: {}", commentId);
+                    return CompletableFuture.completedFuture(null);
+                }
+                postCommentRedisRepository.save(redisEntity);
+                log.debug("Asynchronously updated Redis for post comment: {}", commentId);
+            } catch (Exception e) {
+                log.error("Failed to asynchronously update Redis for post comment: {}", commentId, e);
+            }
+            return CompletableFuture.completedFuture(null);
+        });
+    }
+}

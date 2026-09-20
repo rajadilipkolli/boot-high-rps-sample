@@ -1,0 +1,139 @@
+package com.example.highrps.postcomment.query;
+
+import com.example.highrps.infrastructure.cache.CacheKeyGenerator;
+import com.example.highrps.infrastructure.cache.RequestCoalescer;
+import com.example.highrps.postcomment.command.PostCommentCommandResult;
+import com.example.highrps.postcomment.domain.PostCommentMapper;
+import com.example.highrps.postcomment.domain.PostCommentRedis;
+import com.example.highrps.postcomment.domain.PostCommentRedisRepository;
+import com.example.highrps.postcomment.domain.PostCommentRepository;
+import com.example.highrps.postcomment.domain.PostCommentRequest;
+import com.example.highrps.shared.ResourceNotFoundException;
+import com.example.highrps.shared.redis.DeletionMarkerHandler;
+import com.github.benmanes.caffeine.cache.Cache;
+import java.util.List;
+import java.util.Optional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+/**
+ * Query service for PostComment aggregate.
+ * Handles all read operations with multi-layer caching.
+ */
+@Service
+@Transactional(readOnly = true)
+public class PostCommentQueryService {
+
+    private static final Logger log = LoggerFactory.getLogger(PostCommentQueryService.class);
+
+    private final PostCommentRepository postCommentRepository;
+    private final PostCommentMapper postCommentMapper;
+    private final Cache<String, String> localCache;
+    private final PostCommentRedisRepository postCommentRedisRepository;
+    private final RequestCoalescer<PostCommentRequest> requestCoalescer;
+    private final DeletionMarkerHandler deletionMarkerHandler;
+
+    public PostCommentQueryService(
+            PostCommentRepository postCommentRepository,
+            PostCommentMapper postCommentMapper,
+            Cache<String, String> localCache,
+            PostCommentRedisRepository postCommentRedisRepository,
+            DeletionMarkerHandler deletionMarkerHandler) {
+        this.postCommentRepository = postCommentRepository;
+        this.postCommentMapper = postCommentMapper;
+        this.localCache = localCache;
+        this.postCommentRedisRepository = postCommentRedisRepository;
+        this.deletionMarkerHandler = deletionMarkerHandler;
+        this.requestCoalescer = new RequestCoalescer<>();
+    }
+
+    /**
+     * Get comments by post ID.
+     * Checks Redis first (populated eagerly by command service), then falls back to JPA.
+     */
+    public List<PostCommentCommandResult> getCommentsByPostId(Long postId) {
+        // 1. Try Redis first (eager writes land here immediately)
+        try {
+            var redisComments = postCommentRedisRepository.findByPostId(postId);
+            if (redisComments != null && !redisComments.isEmpty()) {
+                log.debug("getCommentsByPostId: hit Redis for postId={}, count={}", postId, redisComments.size());
+                return redisComments.stream()
+                        .map(postCommentMapper::toResultFromRedis)
+                        .toList();
+            }
+        } catch (Exception e) {
+            log.warn("Failed to query Redis for postId={}, falling back to JPA", postId, e);
+        }
+
+        // 2. Fallback to JPA
+        return postCommentMapper.toResultList(postCommentRepository.findByPostRefId(postId));
+    }
+
+    /**
+     * Resolves a comment that belongs to the requested post and warms faster cache layers when possible.
+     *
+     * @param query the parent post and comment identifiers
+     * @return the matching comment
+     * @throws ResourceNotFoundException if the comment is deleted, absent, or belongs to another post
+     */
+    public PostCommentCommandResult getCommentById(GetPostCommentQuery query) {
+        var cacheKey = CacheKeyGenerator.generatePostCommentKey(
+                query.postId(), query.commentId().id());
+
+        // 1. Check tombstone
+        if (deletionMarkerHandler.isDeleted(DeletionMarkerHandler.POST_COMMENT, cacheKey)) {
+            throw new ResourceNotFoundException(
+                    "PostComment not found with id: " + query.commentId().id() + " for post: " + query.postId());
+        }
+
+        // 2. Local cache
+        var cached = localCache.getIfPresent(cacheKey);
+        if (cached != null) {
+            log.debug(
+                    "Hit local cache for postId={} commentId={}",
+                    query.postId(),
+                    query.commentId().id());
+            return PostCommentCommandResult.fromJson(cached);
+        }
+
+        // 3. Redis materialized view
+        Optional<PostCommentRedis> byId = postCommentRedisRepository.findById(
+                String.valueOf(query.commentId().id()));
+        if (byId.isPresent()) {
+            PostCommentRedis redisEntity = byId.get();
+            if (!redisEntity.getPostId().equals(query.postId())) {
+                throw new ResourceNotFoundException(
+                        "PostComment not found with id: " + query.commentId().id() + " for post: " + query.postId());
+            }
+
+            log.debug(
+                    "Hit Redis for postId={} commentId={}",
+                    query.postId(),
+                    query.commentId().id());
+            PostCommentCommandResult result = postCommentMapper.toResultFromRedis(redisEntity);
+            // Warm local cache
+            try {
+                var json = result.toJson();
+                localCache.put(cacheKey, json);
+            } catch (Exception e) {
+                log.warn("Failed to warm local cache", e);
+            }
+            return result;
+        }
+
+        // Update caches on cache miss
+        var comment = postCommentRepository.getByCommentRefIdAndPostRefId(query.commentId(), query.postId());
+        PostCommentCommandResult result = postCommentMapper.toResult(comment);
+        try {
+            var json = result.toJson();
+            localCache.put(cacheKey, json);
+            postCommentRedisRepository.save(postCommentMapper.toRedisFromEntity(comment));
+        } catch (Exception e) {
+            log.warn("Failed to update local cache after database lookup", e);
+        }
+
+        return result;
+    }
+}

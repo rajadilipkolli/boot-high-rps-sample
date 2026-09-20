@@ -1,0 +1,92 @@
+package com.example.highrps.post.mapper;
+
+import com.example.highrps.post.domain.PostEntity;
+import com.example.highrps.post.domain.PostTagEntity;
+import com.example.highrps.post.domain.TagEntity;
+import com.example.highrps.post.domain.TagResponse;
+import com.example.highrps.post.domain.requests.NewPostRequest;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import org.mapstruct.AfterMapping;
+import org.mapstruct.Context;
+import org.mapstruct.Mapper;
+import org.mapstruct.Mapping;
+import org.mapstruct.MappingConstants;
+import org.mapstruct.MappingTarget;
+import org.mapstruct.NullValueCheckStrategy;
+
+// After Mapping will not be set if we use builder pattern, hence disabled it
+@Mapper(componentModel = MappingConstants.ComponentModel.SPRING, nullValueCheckStrategy = NullValueCheckStrategy.ALWAYS)
+public interface NewPostRequestToPostEntityMapper {
+
+    @Mapping(target = "tags", ignore = true)
+    @Mapping(target = "postRefId", source = "postId")
+    @Mapping(target = "id", ignore = true)
+    @Mapping(target = "authorEntity", ignore = true)
+    @Mapping(target = "version", ignore = true)
+    @Mapping(target = "details.id", ignore = true)
+    @Mapping(target = "details.postEntity", ignore = true)
+    @Mapping(target = "details.createdAt", ignore = true)
+    @Mapping(target = "details.modifiedAt", ignore = true)
+    PostEntity convert(NewPostRequest newPostRequest, @Context Map<String, TagEntity> tagMap);
+
+    @Mapping(target = "tags", ignore = true)
+    @Mapping(target = "id", ignore = true)
+    @Mapping(target = "postRefId", ignore = true)
+    @Mapping(target = "authorEntity", ignore = true)
+    @Mapping(target = "version", ignore = true)
+    @Mapping(target = "details.id", ignore = true)
+    @Mapping(target = "details.postEntity", ignore = true)
+    @Mapping(target = "details.createdAt", ignore = true)
+    @Mapping(target = "details.modifiedAt", ignore = true)
+    void updatePostEntity(
+            NewPostRequest newPostRequest,
+            @MappingTarget PostEntity postEntity,
+            @Context Map<String, TagEntity> tagMap);
+
+    @AfterMapping
+    default void afterMapping(
+            NewPostRequest newPostRequest,
+            @MappingTarget PostEntity postEntity,
+            @Context Map<String, TagEntity> tagMap) {
+
+        if (postEntity.getDetails() != null) {
+            postEntity.getDetails().setPostEntity(postEntity);
+        }
+
+        if (newPostRequest.tags() == null) {
+            return;
+        }
+        var requestedByName = newPostRequest.tags().stream()
+                .filter(t -> t != null && t.tagName() != null && !t.tagName().isBlank())
+                .collect(Collectors.toMap(t -> t.tagName().toLowerCase(Locale.ROOT), Function.identity(), (a, b) -> a));
+
+        var existingByName = postEntity.getTags().stream()
+                .map(PostTagEntity::getTagEntity)
+                .collect(Collectors.toMap(
+                        t -> t.getTagName().toLowerCase(Locale.ROOT), Function.identity(), (a, b) -> a));
+
+        existingByName.keySet().stream()
+                .filter(name -> !requestedByName.containsKey(name))
+                .forEach(name -> postEntity.removeTag(existingByName.get(name)));
+
+        existingByName.forEach((name, tagEntity) -> {
+            TagResponse resp = requestedByName.get(name);
+            if (resp != null && !Objects.equals(tagEntity.getTagDescription(), resp.tagDescription())) {
+                tagEntity.setTagDescription(resp.tagDescription());
+            }
+        });
+
+        requestedByName.keySet().stream()
+                .filter(name -> !existingByName.containsKey(name))
+                .forEach(name -> {
+                    TagEntity tag = tagMap.get(name.toLowerCase(Locale.ROOT));
+                    if (tag != null) {
+                        postEntity.addTag(tag);
+                    }
+                });
+    }
+}

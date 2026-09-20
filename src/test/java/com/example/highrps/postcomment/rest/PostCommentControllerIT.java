@@ -1,0 +1,550 @@
+package com.example.highrps.postcomment.rest;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
+
+import com.example.highrps.author.domain.AuthorEntity;
+import com.example.highrps.common.AbstractIntegrationTest;
+import com.example.highrps.infrastructure.kafka.batch.ScheduledBatchProcessor;
+import com.example.highrps.post.domain.PostDetailsEntity;
+import com.example.highrps.post.domain.PostDetailsResponse;
+import com.example.highrps.post.domain.PostEntity;
+import com.example.highrps.post.domain.PostRedis;
+import com.example.highrps.postcomment.command.PostCommentCommandResult;
+import com.example.highrps.shared.IdGenerator;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.UUID;
+import org.assertj.core.api.InstanceOfAssertFactories;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
+import org.springframework.kafka.listener.MessageListenerContainer;
+import org.springframework.test.context.TestContextManager;
+
+class PostCommentControllerIT extends AbstractIntegrationTest {
+
+    private Long postId;
+
+    @BeforeEach
+    void setUp() {
+        super.clearDatabase();
+        // Create an author
+        AuthorEntity author = new AuthorEntity()
+                .setEmail("comment-test@example.com")
+                .setFirstName("Test")
+                .setLastName("User")
+                .setMobile(1234567890L);
+        PostDetailsEntity postDetailsEntity = new PostDetailsEntity();
+        postDetailsEntity.setCreatedBy("Test");
+        PostEntity postEntity = new PostEntity("Test Post for Comments", "Post content", author);
+        postEntity.setPostRefId(IdGenerator.generateLong());
+        postEntity.setDetails(postDetailsEntity);
+        // No reverse mapping: author.addPost(postEntity) is removed.
+        // The owning side (PostEntity) already has the reference.
+        AuthorEntity authorEntity = authorRepository.save(author);
+        postEntity.setAuthorEntity(authorEntity);
+        postEntity = postRepository.save(postEntity);
+        // saving to redis such that getPost will return data
+        PostRedis postRedis = new PostRedis()
+                .setId(postEntity.getPostRefId())
+                .setTitle(postEntity.getTitle())
+                .setContent(postEntity.getContent())
+                .setPublished(postEntity.isPublished())
+                .setPublishedAt(postEntity.getPublishedAt())
+                .setAuthorEmail(authorEntity.getEmail())
+                .setDetails(new PostDetailsResponse(
+                        postDetailsEntity.getDetailsKey(), LocalDateTime.now(), postDetailsEntity.getCreatedBy()))
+                .setTags(List.of());
+        postRedisRepository.save(postRedis);
+        postId = postEntity.getPostRefId();
+    }
+
+    /**
+     * Verifies a post comment can be created.
+     */
+    @Test
+    void shouldCreatePostComment() {
+        long count = postCommentRepository.count();
+        var result = mockMvcTester
+                .post()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .uri("/api/posts/{postId}/comments", postId)
+                .content("""
+                                                {
+                                                  "title": "Great post!",
+                                                  "content": "This is a very insightful comment.",
+                                                  "published": true
+                                                }
+                                                """)
+                .contentType(MediaType.APPLICATION_JSON)
+                .exchange();
+
+        result.assertThat()
+                .hasStatus(HttpStatus.CREATED)
+                .hasContentType(MediaType.APPLICATION_JSON)
+                .containsHeader("Location")
+                .bodyJson()
+                .convertTo(PostCommentCommandResult.class)
+                .satisfies(response -> {
+                    assertThat(response.id()).isNotNull();
+                    assertThat(response.title()).isEqualTo("Great post!");
+                    assertThat(response.content()).isEqualTo("This is a very insightful comment.");
+                    assertThat(response.published()).isTrue();
+                    assertThat(response.publishedAt()).isNotNull();
+                    assertThat(response.postId()).isEqualTo(postId);
+                    assertThat(response.createdAt()).isNotNull();
+                    assertThat(response.modifiedAt()).isNull();
+                });
+
+        String location = result.getResponse().getHeader("Location");
+        Long commentId = Long.parseLong(location.substring(location.lastIndexOf('/') + 1));
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            mockMvcTester
+                    .get()
+                    .uri("/api/posts/{postId}/comments/{id}", postId, commentId)
+                    .exchange()
+                    .assertThat()
+                    .hasStatus(HttpStatus.OK);
+        });
+
+        await().atMost(Duration.ofSeconds(60))
+                .pollDelay(Duration.ofSeconds(1))
+                .pollInterval(Duration.ofMillis(500))
+                .untilAsserted(() -> {
+                    scheduledBatchProcessors.forEach(ScheduledBatchProcessor::processBatch);
+                    assertThat(postCommentRepository.count()).isEqualTo(count + 1);
+                });
+    }
+
+    /**
+     * Verifies a post comment can be retrieved by identifier.
+     */
+    @Test
+    void shouldGetPostCommentById() {
+        // Create a comment first
+        Long[] commentIdHolder = new Long[1];
+        mockMvcTester
+                .post()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .uri("/api/posts/{postId}/comments", postId)
+                .content("""
+                                                                {
+                                                                  "title": "Test Comment",
+                                                                  "content": "Test content",
+                                                                  "published": false
+                                                                }
+                                                                """)
+                .contentType(MediaType.APPLICATION_JSON)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.CREATED)
+                .bodyJson()
+                .convertTo(PostCommentCommandResult.class)
+                .satisfies(response -> commentIdHolder[0] = response.id());
+
+        Long commentId = commentIdHolder[0];
+
+        // Get the comment by ID
+        mockMvcTester
+                .get()
+                .uri("/api/posts/{postId}/comments/{postCommentId}", postId, commentId)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.OK)
+                .hasContentType(MediaType.APPLICATION_JSON)
+                .bodyJson()
+                .convertTo(PostCommentCommandResult.class)
+                .satisfies(response -> {
+                    assertThat(response.id()).isEqualTo(commentId);
+                    assertThat(response.title()).isEqualTo("Test Comment");
+                    assertThat(response.content()).isEqualTo("Test content");
+                    assertThat(response.published()).isFalse();
+                    assertThat(response.publishedAt()).isNull();
+                    assertThat(response.postId()).isEqualTo(postId);
+                    assertThat(response.createdAt()).isNotNull();
+                    assertThat(response.modifiedAt()).isNull();
+                });
+
+        await().atMost(Duration.ofSeconds(60))
+                .pollDelay(Duration.ofSeconds(1))
+                .pollInterval(Duration.ofMillis(500))
+                .untilAsserted(() -> {
+                    scheduledBatchProcessors.forEach(ScheduledBatchProcessor::processBatch);
+                    assertThat(postCommentRepository.findByCommentRefIdAndPostRefId(commentId, postId))
+                            .isPresent();
+                });
+    }
+
+    /**
+     * Verifies all comments for a post can be listed.
+     */
+    @Test
+    void shouldGetAllCommentsForPost() {
+        // Create multiple comments
+        mockMvcTester
+                .post()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .uri("/api/posts/{postId}/comments", postId)
+                .content("""
+                                                {
+                                                  "title": "First Comment",
+                                                  "content": "First content",
+                                                  "published": true
+                                                }
+                                                """)
+                .contentType(MediaType.APPLICATION_JSON)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.CREATED);
+
+        mockMvcTester
+                .post()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .uri("/api/posts/{postId}/comments", postId)
+                .content("""
+                                                {
+                                                  "title": "Second Comment",
+                                                  "content": "Second content",
+                                                  "published": false
+                                                }
+                                                """)
+                .contentType(MediaType.APPLICATION_JSON)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.CREATED);
+
+        // Get all comments
+        await().atMost(Duration.ofSeconds(60))
+                .pollDelay(Duration.ofSeconds(1))
+                .pollInterval(Duration.ofMillis(500))
+                .untilAsserted(() -> mockMvcTester
+                        .get()
+                        .uri("/api/posts/{postId}/comments", postId)
+                        .exchange()
+                        .assertThat()
+                        .hasStatus(HttpStatus.OK)
+                        .hasContentType(MediaType.APPLICATION_JSON)
+                        .bodyJson()
+                        .convertTo(InstanceOfAssertFactories.list(PostCommentCommandResult.class))
+                        .hasSize(2));
+    }
+
+    /**
+     * Verifies a post comment can be updated.
+     */
+    @Test
+    void shouldUpdatePostComment() {
+        // Create a comment
+        Long[] commentIdHolder = new Long[1];
+        mockMvcTester
+                .post()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .uri("/api/posts/{postId}/comments", postId)
+                .content("""
+                                                                {
+                                                                  "title": "Original Title",
+                                                                  "content": "Original content",
+                                                                  "published": false
+                                                                }
+                                                                """)
+                .contentType(MediaType.APPLICATION_JSON)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.CREATED)
+                .bodyJson()
+                .convertTo(PostCommentCommandResult.class)
+                .satisfies(response -> commentIdHolder[0] = response.id());
+
+        Long commentId = commentIdHolder[0];
+
+        // Update the comment
+        mockMvcTester
+                .put()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .uri("/api/posts/{postId}/comments/{postCommentId}", postId, commentId)
+                .content("""
+                                                {
+                                                  "title": "Updated Title",
+                                                  "content": "Updated content",
+                                                  "published": true
+                                                }
+                                                """)
+                .contentType(MediaType.APPLICATION_JSON)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.OK)
+                .bodyJson()
+                .convertTo(PostCommentCommandResult.class)
+                .satisfies(response -> {
+                    assertThat(response.id()).isEqualTo(commentId);
+                    assertThat(response.title()).isEqualTo("Updated Title");
+                    assertThat(response.content()).isEqualTo("Updated content");
+                    assertThat(response.published()).isTrue();
+                    assertThat(response.publishedAt()).isNotNull();
+                    assertThat(response.modifiedAt()).isNotNull();
+                    assertThat(response.postId()).isEqualTo(postId);
+                });
+
+        await().atMost(Duration.ofSeconds(60))
+                .pollDelay(Duration.ofSeconds(1))
+                .pollInterval(Duration.ofMillis(500))
+                .untilAsserted(() -> {
+                    scheduledBatchProcessors.forEach(ScheduledBatchProcessor::processBatch);
+                    assertThat(postCommentRepository.findByCommentRefIdAndPostRefId(commentId, postId))
+                            .hasValueSatisfying(commentEntity -> {
+                                assertThat(commentEntity.getTitle()).isEqualTo("Updated Title");
+                                assertThat(commentEntity.getContent()).isEqualTo("Updated content");
+                                assertThat(commentEntity.isPublished()).isTrue();
+                                assertThat(commentEntity.getPublishedAt()).isNotNull();
+                                assertThat(commentEntity.getCreatedAt()).isNotNull();
+                                assertThat(commentEntity.getModifiedAt()).isNotNull();
+                            });
+                });
+    }
+
+    /**
+     * Verifies a post comment can be deleted.
+     */
+    @Test
+    void shouldDeletePostComment() {
+        // Create a comment
+        Long[] commentIdHolder = new Long[1];
+        mockMvcTester
+                .post()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .uri("/api/posts/{postId}/comments", postId)
+                .content("""
+                                                                {
+                                                                  "title": "To be deleted",
+                                                                  "content": "This will be deleted",
+                                                                  "published": false
+                                                                }
+                                                                """)
+                .contentType(MediaType.APPLICATION_JSON)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.CREATED)
+                .bodyJson()
+                .convertTo(PostCommentCommandResult.class)
+                .satisfies(response -> commentIdHolder[0] = response.id());
+
+        Long commentId = commentIdHolder[0];
+
+        // Delete the comment
+        mockMvcTester
+                .delete()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .uri("/api/posts/{postId}/comments/{postCommentId}", postId, commentId)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.NO_CONTENT);
+
+        // Verify it's deleted
+        mockMvcTester
+                .get()
+                .uri("/api/posts/{postId}/comments/{postCommentId}", postId, commentId)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.NOT_FOUND);
+
+        await().atMost(Duration.ofSeconds(60))
+                .pollInterval(Duration.ofSeconds(1))
+                .untilAsserted(() -> {
+                    scheduledBatchProcessors.forEach(ScheduledBatchProcessor::processBatch);
+                    assertThat(postCommentRepository.findByCommentRefIdAndPostRefId(commentId, postId))
+                            .isEmpty();
+                });
+    }
+
+    /**
+     * Verifies duplicate comment titles on one post produce a conflict response.
+     */
+    @Test
+    void shouldRejectDuplicateCommentTitleForSamePost() {
+        String title = "Unique Title For Duplicate Test " + UUID.randomUUID();
+
+        // First comment should succeed
+        mockMvcTester
+                .post()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .uri("/api/posts/{postId}/comments", postId)
+                .content("""
+                        {
+                          "title": "%s",
+                          "content": "First comment content",
+                          "published": true
+                        }
+                        """.formatted(title))
+                .contentType(MediaType.APPLICATION_JSON)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.CREATED);
+
+        // Second comment with the same title and same postId should fail with 400 Bad Request
+        mockMvcTester
+                .post()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .uri("/api/posts/{postId}/comments", postId)
+                .content("""
+                        {
+                          "title": "%s",
+                          "content": "Second comment content",
+                          "published": true
+                        }
+                        """.formatted(title))
+                .contentType(MediaType.APPLICATION_JSON)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.CONFLICT);
+    }
+
+    /**
+     * Verifies an unknown comment identifier produces a not-found response.
+     */
+    @Test
+    void shouldReturn404WhenCommentNotFound() {
+        mockMvcTester
+                .get()
+                .uri("/api/posts/{postId}/comments/{postCommentId}", postId, 99999L)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.NOT_FOUND)
+                .hasContentType(MediaType.APPLICATION_PROBLEM_JSON);
+    }
+
+    /**
+     * Verifies a comment cannot be read through a different parent post.
+     */
+    @Test
+    void shouldReturn404WhenCommentDoesNotBelongToPost() {
+        // Create a comment for this post
+        Long[] commentIdHolder = new Long[1];
+        mockMvcTester
+                .post()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .uri("/api/posts/{postId}/comments", postId)
+                .content("""
+                                                                {
+                                                                  "title": "Comment",
+                                                                  "content": "Content",
+                                                                  "published": false
+                                                                }
+                                                                """)
+                .contentType(MediaType.APPLICATION_JSON)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.CREATED)
+                .bodyJson()
+                .convertTo(PostCommentCommandResult.class)
+                .satisfies(response -> commentIdHolder[0] = response.id());
+
+        Long commentId = commentIdHolder[0];
+
+        // Try to access it with a different postId
+        mockMvcTester
+                .get()
+                .uri("/api/posts/{postId}/comments/{postCommentId}", 99999L, commentId)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.NOT_FOUND);
+    }
+
+    /**
+     * Verifies comment reads fall back to Kafka Streams after cache misses.
+     */
+    @org.junit.jupiter.api.Disabled("Kafka streams removed")
+    @Test
+    void shouldFallbackToKafkaStreamsWhenCachesAreMissed() {
+        // 1) Create a comment
+        Long[] commentIdHolder = new Long[1];
+        mockMvcTester
+                .post()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .uri("/api/posts/{postId}/comments", postId)
+                .content("""
+                        {
+                          "title": "Fallback Streams",
+                          "content": "Streams fallback content",
+                          "published": true
+                        }
+                        """)
+                .contentType(MediaType.APPLICATION_JSON)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.CREATED)
+                .bodyJson()
+                .convertTo(PostCommentCommandResult.class)
+                .satisfies(response -> commentIdHolder[0] = response.id());
+
+        Long commentId = commentIdHolder[0];
+        String cacheKey =
+                com.example.highrps.infrastructure.cache.CacheKeyGenerator.generatePostCommentKey(postId, commentId);
+
+        // The command path updates Redis asynchronously; wait until that write is visible before testing fallback.
+        await().atMost(Duration.ofSeconds(10))
+                .pollInterval(Duration.ofMillis(100))
+                .untilAsserted(() -> assertThat(postCommentRedisRepository.findById(String.valueOf(commentId)))
+                        .isPresent());
+
+        // 2) Clear local cache and Redis
+        localCache.invalidate(cacheKey);
+        postCommentRedisRepository.deleteById(String.valueOf(commentId));
+
+        assertThat(localCache.getIfPresent(cacheKey)).isNull();
+        assertThat(postCommentRedisRepository.findById(String.valueOf(commentId)))
+                .isEmpty();
+
+        // Stop the Kafka listener to prevent it from repopulating Redis asynchronously during the test,
+        // which forces the GET request to strictly rely on the Kafka Streams state store fallback.
+        KafkaListenerEndpointRegistry registry = TestContextManager.class != null
+                ? applicationContext.getBean(KafkaListenerEndpointRegistry.class)
+                : null;
+        MessageListenerContainer listenerContainer = registry != null
+                ? registry.getListenerContainers().stream()
+                        .filter(c -> "post-comments-redis-writer".equals(c.getGroupId())
+                                || "post-comments-aggregates"
+                                        .equals(c.getContainerProperties().getTopics()[0]))
+                        .findFirst()
+                        .orElse(null)
+                : null;
+
+        assertThat(listenerContainer)
+                .as("Targeted Redis-writer listener container must be found")
+                .isNotNull();
+        listenerContainer.pause();
+
+        try {
+            // 3) GET request should fall back to Kafka Streams and succeed
+            mockMvcTester
+                    .get()
+                    .uri("/api/posts/{postId}/comments/{postCommentId}", postId, commentId)
+                    .exchange()
+                    .assertThat()
+                    .hasStatus(HttpStatus.OK)
+                    .hasContentType(MediaType.APPLICATION_JSON)
+                    .bodyJson()
+                    .convertTo(PostCommentCommandResult.class)
+                    .satisfies(response -> {
+                        assertThat(response.id()).isEqualTo(commentId);
+                        assertThat(response.title()).isEqualTo("Fallback Streams");
+                    });
+
+            // 4) Assert Redis is populated again by the fallback warm-up logic
+            assertThat(postCommentRedisRepository.findById(String.valueOf(commentId)))
+                    .isPresent();
+
+            // Assert local cache is also populated
+            assertThat(localCache.getIfPresent(cacheKey)).isNotNull();
+
+        } finally {
+            if (listenerContainer != null) {
+                listenerContainer.resume();
+            }
+        }
+    }
+}

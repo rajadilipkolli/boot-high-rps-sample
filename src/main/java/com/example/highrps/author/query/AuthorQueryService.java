@@ -1,0 +1,208 @@
+package com.example.highrps.author.query;
+
+import com.example.highrps.author.domain.AuthorEntity;
+import com.example.highrps.author.domain.AuthorRedis;
+import com.example.highrps.author.domain.AuthorRedisRepository;
+import com.example.highrps.author.domain.AuthorRepository;
+import com.example.highrps.author.dto.AuthorRequest;
+import com.example.highrps.shared.ResourceNotFoundException;
+import com.example.highrps.shared.redis.DeletionMarkerHandler;
+import com.github.benmanes.caffeine.cache.Cache;
+import java.util.Locale;
+import java.util.Optional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.databind.json.JsonMapper;
+
+/**
+ * Query service for Author aggregate.
+ * Handles all read operations with multi-layer caching.
+ */
+@Service
+@Transactional(readOnly = true)
+public class AuthorQueryService {
+
+    private static final Logger log = LoggerFactory.getLogger(AuthorQueryService.class);
+
+    private final Cache<String, String> localCache;
+    private final AuthorRedisRepository authorRedisRepository;
+    private final DeletionMarkerHandler deletionMarkerHandler;
+    private final JsonMapper jsonMapper;
+    private final AuthorRepository authorRepository;
+
+    /**
+     * Creates an author query service backed by local, Redis, stream, and database views.
+     *
+     * @param localCache local author cache
+     * @param authorRedisRepository Redis author repository
+     * @param authorRepository database author repository
+     * @param jsonMapper serializer for cached values
+     * @param deletionMarkerHandler handler for deleted aggregates
+     */
+    public AuthorQueryService(
+            Cache<String, String> localCache,
+            AuthorRedisRepository authorRedisRepository,
+            AuthorRepository authorRepository,
+            JsonMapper jsonMapper,
+            DeletionMarkerHandler deletionMarkerHandler) {
+        this.localCache = localCache;
+        this.authorRedisRepository = authorRedisRepository;
+        this.authorRepository = authorRepository;
+        this.jsonMapper = jsonMapper;
+        this.deletionMarkerHandler = deletionMarkerHandler;
+    }
+
+    /**
+     * Resolves an author from the read caches, stream state, or database and warms faster cache layers when possible.
+     *
+     * @param query the email-based author query
+     * @return the matching author projection
+     * @throws ResourceNotFoundException if the author is marked as deleted or cannot be found
+     */
+    public AuthorProjection getAuthor(AuthorQuery query) {
+        String email = query.email();
+        log.debug("Querying author with email: {}", email);
+
+        // 1. Check tombstone
+        String cacheKey = email.toLowerCase(Locale.ROOT);
+        if (deletionMarkerHandler.isDeleted(DeletionMarkerHandler.AUTHOR, cacheKey)) {
+            throw new ResourceNotFoundException("Author not found for email: " + email);
+        }
+
+        // 2. Local cache
+        String cached = localCache.getIfPresent(cacheKey);
+        if (cached != null) {
+            log.debug("Hit local cache for email: {}", email);
+            return parseProjection(cached);
+        }
+
+        // 3. Redis materialized view
+        Optional<AuthorRedis> redisAuthor = authorRedisRepository.findById(cacheKey);
+        if (redisAuthor.isPresent()) {
+            log.debug("Hit Redis for email: {}", email);
+            AuthorProjection projection = fromRedis(redisAuthor.get());
+            // Warm local cache
+            try {
+                String json = jsonMapper.writeValueAsString(projection);
+                localCache.put(cacheKey, json);
+            } catch (Exception e) {
+                log.warn("Failed to warm local cache", e);
+            }
+            return projection;
+        }
+
+        // 5. Database fallback
+        AuthorEntity authorEntity = authorRepository.getByEmail(email);
+        log.debug("Hit DB for email: {}", email);
+        AuthorProjection projection = fromEntity(authorEntity);
+        // Warm both caches and return
+        try {
+            String json = jsonMapper.writeValueAsString(projection);
+            localCache.put(cacheKey, json);
+
+            authorRedisRepository.save(toRedis(new AuthorRequest(
+                    authorEntity.getFirstName(),
+                    authorEntity.getMiddleName(),
+                    authorEntity.getLastName(),
+                    authorEntity.getMobile(),
+                    authorEntity.getEmail(),
+                    authorEntity.getRegisteredAt(),
+                    authorEntity.getCreatedAt(),
+                    authorEntity.getModifiedAt())));
+        } catch (Exception _) {
+        }
+        return projection;
+    }
+
+    /**
+     * Checks whether an author can be resolved by email.
+     *
+     * @param email the email to check
+     * @return {@code true} when the author exists
+     */
+    public boolean exists(String email) {
+        try {
+            getAuthor(new AuthorQuery(email));
+            return true;
+        } catch (ResourceNotFoundException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Deserializes a cached author projection.
+     *
+     * @param json the cached JSON value
+     * @return the deserialized projection
+     */
+    private AuthorProjection parseProjection(String json) {
+        try {
+            return jsonMapper.readValue(json, AuthorProjection.class);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to parse AuthorProjection from JSON", e);
+        }
+    }
+
+    /**
+     * Maps a database author to its read projection.
+     *
+     * @param entity the database author
+     * @return the author projection
+     */
+    private AuthorProjection fromEntity(AuthorEntity entity) {
+        return new AuthorProjection(
+                entity.getEmail(),
+                entity.getFirstName(),
+                entity.getMiddleName(),
+                entity.getLastName(),
+                entity.getMobile(),
+                entity.getRegisteredAt(),
+                entity.getCreatedAt(),
+                entity.getModifiedAt());
+    }
+
+    /**
+     * Maps a Redis author to its read projection.
+     *
+     * @param authorRedis the cached author
+     * @return the author projection
+     */
+    private AuthorProjection fromRedis(AuthorRedis authorRedis) {
+        return new AuthorProjection(
+                authorRedis.getEmail(),
+                authorRedis.getFirstName(),
+                authorRedis.getMiddleName(),
+                authorRedis.getLastName(),
+                authorRedis.getMobile(),
+                authorRedis.getRegisteredAt(),
+                authorRedis.getCreatedAt(),
+                authorRedis.getModifiedAt());
+    }
+
+    private AuthorProjection fromAuthorRequest(AuthorRequest request) {
+        return new AuthorProjection(
+                request.email(),
+                request.firstName(),
+                request.middleName(),
+                request.lastName(),
+                request.mobile(),
+                request.registeredAt(),
+                request.createdAt(),
+                request.modifiedAt());
+    }
+
+    private AuthorRedis toRedis(AuthorRequest request) {
+        AuthorRedis authorRedis = new AuthorRedis()
+                .setEmail(request.email())
+                .setFirstName(request.firstName())
+                .setMiddleName(request.middleName())
+                .setLastName(request.lastName())
+                .setMobile(request.mobile())
+                .setRegisteredAt(request.registeredAt());
+        authorRedis.setCreatedAt(request.createdAt());
+        authorRedis.setModifiedAt(request.modifiedAt());
+        return authorRedis;
+    }
+}
