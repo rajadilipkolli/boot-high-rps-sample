@@ -36,9 +36,6 @@ on:
 jobs:
   performance-comparison:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: boot-high-rps-sample
 
     steps:
       - uses: actions/checkout@v7
