@@ -6,6 +6,7 @@ import static io.gatling.javaapi.http.HttpDsl.*;
 import com.example.highrps.gatling.feeders.AuthorFeeder;
 import com.example.highrps.gatling.feeders.MutationFeeder;
 import io.gatling.javaapi.core.ChainBuilder;
+import java.net.URI;
 import java.util.UUID;
 
 public class PostScenario {
@@ -32,12 +33,13 @@ public class PostScenario {
                         .check(header("Location").saveAs("postLocation")))
                 .exec(session -> {
                     String location = session.getString("postLocation");
-                    String postId = location.substring(location.lastIndexOf('/') + 1);
-                    return session.set("newPostId", postId);
+                    String postPath = URI.create(location).getRawPath();
+                    String postId = postPath.substring(postPath.lastIndexOf('/') + 1);
+                    return session.set("newPostId", postId).set("postPath", postPath);
                 })
                 // functional check: verify created post
                 .exec(http("Verify Created Post")
-                        .get("#{postLocation}")
+                        .get("#{postPath}")
                         .check(status().is(200))
                         .check(jsonPath("$.authorEmail").is(session -> session.getString("email")))
                         .check(jsonPath("$.tags[0].tagName").is("gatling")));

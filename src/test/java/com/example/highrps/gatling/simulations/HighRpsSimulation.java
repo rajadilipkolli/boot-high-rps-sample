@@ -69,67 +69,46 @@ public class HighRpsSimulation extends Simulation {
 
         setUp(population)
                 .protocols(httpProtocol)
-                .assertions(
-                        global().failedRequests().percent().lte(LoadTestConfig.MAX_ERROR_RATE),
-                        global().responseTime().percentile3().lte((int) (LoadTestConfig.BASELINE_P95_MS
-                                * (1.0 + LoadTestConfig.ALLOWED_P95_DELTA_PERCENT / 100.0))),
-                        global().responseTime().percentile4().lte((int) (LoadTestConfig.BASELINE_P99_MS
-                                * (1.0 + LoadTestConfig.ALLOWED_P99_DELTA_PERCENT / 100.0))),
-                        global().requestsPerSec()
-                                .gte(LoadTestConfig.BASELINE_THROUGHPUT
-                                        * (1.0 + LoadTestConfig.ALLOWED_THROUGHPUT_DELTA_PERCENT / 100.0)),
-                        details("author_register").failedRequests().percent().lte(LoadTestConfig.MAX_ERROR_RATE),
-                        details("author_register").responseTime().percentile3().lte((int)
-                                (LoadTestConfig.BASELINE_P95_MS
-                                        * (1.0 + LoadTestConfig.ALLOWED_P95_DELTA_PERCENT / 100.0))),
-                        details("author_register").responseTime().percentile4().lte((int)
-                                (LoadTestConfig.BASELINE_P99_MS
-                                        * (1.0 + LoadTestConfig.ALLOWED_P99_DELTA_PERCENT / 100.0))),
-                        details("post_create").failedRequests().percent().lte(LoadTestConfig.MAX_ERROR_RATE),
-                        details("post_create").responseTime().percentile3().lte((int) (LoadTestConfig.BASELINE_P95_MS
-                                * (1.0 + LoadTestConfig.ALLOWED_P95_DELTA_PERCENT / 100.0))),
-                        details("post_create").responseTime().percentile4().lte((int) (LoadTestConfig.BASELINE_P99_MS
-                                * (1.0 + LoadTestConfig.ALLOWED_P99_DELTA_PERCENT / 100.0))),
-                        details("post_update").failedRequests().percent().lte(LoadTestConfig.MAX_ERROR_RATE),
-                        details("post_update").responseTime().percentile3().lte((int) (LoadTestConfig.BASELINE_P95_MS
-                                * (1.0 + LoadTestConfig.ALLOWED_P95_DELTA_PERCENT / 100.0))),
-                        details("post_update").responseTime().percentile4().lte((int) (LoadTestConfig.BASELINE_P99_MS
-                                * (1.0 + LoadTestConfig.ALLOWED_P99_DELTA_PERCENT / 100.0))),
-                        details("post_delete").failedRequests().percent().lte(LoadTestConfig.MAX_ERROR_RATE),
-                        details("post_delete").responseTime().percentile3().lte((int) (LoadTestConfig.BASELINE_P95_MS
-                                * (1.0 + LoadTestConfig.ALLOWED_P95_DELTA_PERCENT / 100.0))),
-                        details("post_delete").responseTime().percentile4().lte((int) (LoadTestConfig.BASELINE_P99_MS
-                                * (1.0 + LoadTestConfig.ALLOWED_P99_DELTA_PERCENT / 100.0))),
-                        details("post_read").failedRequests().percent().lte(LoadTestConfig.MAX_ERROR_RATE),
-                        details("post_read").responseTime().percentile3().lte((int) (LoadTestConfig.BASELINE_P95_MS
-                                * (1.0 + LoadTestConfig.ALLOWED_P95_DELTA_PERCENT / 100.0))),
-                        details("post_read").responseTime().percentile4().lte((int) (LoadTestConfig.BASELINE_P99_MS
-                                * (1.0 + LoadTestConfig.ALLOWED_P99_DELTA_PERCENT / 100.0))),
-                        details("comment_create").failedRequests().percent().lte(LoadTestConfig.MAX_ERROR_RATE),
-                        details("comment_create").responseTime().percentile3().lte((int) (LoadTestConfig.BASELINE_P95_MS
-                                * (1.0 + LoadTestConfig.ALLOWED_P95_DELTA_PERCENT / 100.0))),
-                        details("comment_create").responseTime().percentile4().lte((int) (LoadTestConfig.BASELINE_P99_MS
-                                * (1.0 + LoadTestConfig.ALLOWED_P99_DELTA_PERCENT / 100.0))),
-                        details("comment_update").failedRequests().percent().lte(LoadTestConfig.MAX_ERROR_RATE),
-                        details("comment_update").responseTime().percentile3().lte((int) (LoadTestConfig.BASELINE_P95_MS
-                                * (1.0 + LoadTestConfig.ALLOWED_P95_DELTA_PERCENT / 100.0))),
-                        details("comment_update").responseTime().percentile4().lte((int) (LoadTestConfig.BASELINE_P99_MS
-                                * (1.0 + LoadTestConfig.ALLOWED_P99_DELTA_PERCENT / 100.0))),
-                        details("comment_delete").failedRequests().percent().lte(LoadTestConfig.MAX_ERROR_RATE),
-                        details("comment_delete").responseTime().percentile3().lte((int) (LoadTestConfig.BASELINE_P95_MS
-                                * (1.0 + LoadTestConfig.ALLOWED_P95_DELTA_PERCENT / 100.0))),
-                        details("comment_delete").responseTime().percentile4().lte((int) (LoadTestConfig.BASELINE_P99_MS
-                                * (1.0 + LoadTestConfig.ALLOWED_P99_DELTA_PERCENT / 100.0))),
-                        details("comment_read").failedRequests().percent().lte(LoadTestConfig.MAX_ERROR_RATE),
-                        details("comment_read").responseTime().percentile3().lte((int) (LoadTestConfig.BASELINE_P95_MS
-                                * (1.0 + LoadTestConfig.ALLOWED_P95_DELTA_PERCENT / 100.0))),
-                        details("comment_read").responseTime().percentile4().lte((int) (LoadTestConfig.BASELINE_P99_MS
-                                * (1.0 + LoadTestConfig.ALLOWED_P99_DELTA_PERCENT / 100.0))),
-                        details("tag_read").failedRequests().percent().lte(LoadTestConfig.MAX_ERROR_RATE),
-                        details("tag_read").responseTime().percentile3().lte((int) (LoadTestConfig.BASELINE_P95_MS
-                                * (1.0 + LoadTestConfig.ALLOWED_P95_DELTA_PERCENT / 100.0))),
-                        details("tag_read").responseTime().percentile4().lte((int) (LoadTestConfig.BASELINE_P99_MS
-                                * (1.0 + LoadTestConfig.ALLOWED_P99_DELTA_PERCENT / 100.0))));
+                .assertions(assertionsForProfile(includePerOperationLatencyAssertions(LoadTestConfig.PROFILE))
+                        .toArray(Assertion[]::new));
+    }
+
+    static boolean includePerOperationLatencyAssertions(String profile) {
+        return !"smoke".equalsIgnoreCase(profile);
+    }
+
+    static List<Assertion> assertionsForProfile(boolean includePerOperationLatencyAssertions) {
+        List<Assertion> assertions = new ArrayList<>();
+        assertions.add(global().failedRequests().percent().lte(LoadTestConfig.MAX_ERROR_RATE));
+        assertions.add(global().responseTime().percentile3().lte((int)
+                (LoadTestConfig.BASELINE_P95_MS * (1.0 + LoadTestConfig.ALLOWED_P95_DELTA_PERCENT / 100.0))));
+        assertions.add(global().responseTime().percentile4().lte((int)
+                (LoadTestConfig.BASELINE_P99_MS * (1.0 + LoadTestConfig.ALLOWED_P99_DELTA_PERCENT / 100.0))));
+        assertions.add(global().requestsPerSec()
+                .gte(LoadTestConfig.BASELINE_THROUGHPUT
+                        * (1.0 + LoadTestConfig.ALLOWED_THROUGHPUT_DELTA_PERCENT / 100.0)));
+
+        List<String> operations = List.of(
+                "author_register",
+                "post_create",
+                "post_update",
+                "post_delete",
+                "post_read",
+                "comment_create",
+                "comment_update",
+                "comment_delete",
+                "comment_read",
+                "tag_read");
+        for (String operation : operations) {
+            assertions.add(details(operation).failedRequests().percent().lte(LoadTestConfig.MAX_ERROR_RATE));
+            if (includePerOperationLatencyAssertions) {
+                assertions.add(details(operation).responseTime().percentile3().lte((int)
+                        (LoadTestConfig.BASELINE_P95_MS * (1.0 + LoadTestConfig.ALLOWED_P95_DELTA_PERCENT / 100.0))));
+                assertions.add(details(operation).responseTime().percentile4().lte((int)
+                        (LoadTestConfig.BASELINE_P99_MS * (1.0 + LoadTestConfig.ALLOWED_P99_DELTA_PERCENT / 100.0))));
+            }
+        }
+        return assertions;
     }
 
     /**
