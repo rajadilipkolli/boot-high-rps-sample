@@ -1,9 +1,0 @@
-dontinline,*.*_all_jmhStub
-dontinline,*.*_avgt_jmhStub
-dontinline,*.*_sample_jmhStub
-dontinline,*.*_ss_jmhStub
-dontinline,*.*_thrpt_jmhStub
-inline,com/example/highrps/ApiLoadBenchmark.createPostBenchmark
-inline,com/example/highrps/ApiLoadBenchmark.readPostBenchmark
-inline,com/example/highrps/ApiLoadBenchmark.setup
-inline,com/example/highrps/ApiLoadBenchmark.tearDown

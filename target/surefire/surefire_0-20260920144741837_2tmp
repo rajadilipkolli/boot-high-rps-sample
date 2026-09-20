@@ -1,7 +1,0 @@
-#surefire_0
-#Sun Sep 20 14:47:41 UTC 2026
-basedir=/workspaces/boot-high-rps-sample
-git.branch=initial-commit
-git.commit.id.abbrev=49751a2
-git.commit.id.describe=49751a2-dirty
-localRepository=/home/codespace/.m2/repository
