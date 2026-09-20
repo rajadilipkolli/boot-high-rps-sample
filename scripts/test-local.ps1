@@ -36,13 +36,13 @@ function Test-RequiredFeederFiles {
 Stop-Process -Name java -ErrorAction SilentlyContinue
 
 Write-Host "Starting infrastructure..."
-docker-compose -p boot-high-rps-sample -f docker/docker-compose-sentinel.yml up -d
-docker-compose -p boot-high-rps-sample -f docker/docker-compose.yml up -d
-docker-compose -p boot-high-rps-sample -f docker/docker-compose-monitoring.yml up -d
+docker compose -p boot-high-rps-sample -f docker/docker-compose-sentinel.yml up -d
+docker compose -p boot-high-rps-sample -f docker/docker-compose.yml up -d
+docker compose -p boot-high-rps-sample -f docker/docker-compose-monitoring.yml up -d
 
 Write-Host "Building app..."
 cmd /c "mvnw.cmd clean package -DskipTests"
-docker-compose -p boot-high-rps-sample -f docker/docker-compose.yml build app
+docker compose -p boot-high-rps-sample -f docker/docker-compose.yml build app
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Build failed!"
     exit 1
