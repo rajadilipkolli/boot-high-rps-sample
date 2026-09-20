@@ -5,7 +5,7 @@ This module implements a simplified version of the "100,000 RPS with Spring Boot
 Summary
 - Virtual Threads enabled (Spring Boot 4).
 - API hot path reads from Redis and local Caffeine cache only.
-- Kafka used for async event pipeline; Kafka Streams performs pre-aggregation and materialized views.
+- Redis Streams `events:queue` provides the async event pipeline; `ScheduledBatchProcessor` drains the stream and delegates database writes to `EntityBatchProcessor` implementations.
 - Redis stores materialized aggregates and is the single source of truth for reads.
 - PostgreSQL (or other DB) is used for async durability/writes and is not on the hot path.
 
@@ -78,8 +78,8 @@ When an entity (Author, Post, PostComment) is created or updated:
 Because Redis is updated synchronously on the API hot path, if a client creates a record on Node A and their subsequent `GET` request is routed to Node B, Node B will immediately find the fresh record in the shared Redis cluster. Local Caffeine cache staleness across instances is bounded by the 5-minute `expireAfterWrite` TTL, since the Redis Pub/Sub invalidation infrastructure exists but is not currently wired.
 
 Suggestions & next steps
-- Add an HTTP readiness probe that confirms `posts-store` is queryable before serving interactive queries.
-- Add observability: meters for `posts-store` misses, Streams state, Redis RTT, and batch processing throughput.
+- Add an HTTP readiness probe that confirms the `AuthorRedisRepository`, `PostRedisRepository`, and `PostCommentRedisRepository` materialized views are queryable before serving interactive queries.
+- Add observability: meters for Redis materialized-view repository misses, Streams state, Redis RTT, and batch processing throughput.
 - Harden error handling in Redis materializer (retry/backoff, DLQ monitoring).
 
 ## Throughput Benchmarks (ApiLoadBenchmark)
@@ -95,7 +95,7 @@ We ran JMH benchmarks on the local environment simulating a workload of 90% read
 | After Idempotency Lua Script (100 Threads)                    | ~443 ops/s     | ~435 ops/s     | ~8 ops/s         |
 | After Offloading Idempotency (100 Threads)                    | ~266 ops/s     | ~261 ops/s     | ~5 ops/s         |
 
-**Note on Redis Sync Optimization:** By eliminating redundant, blocking network I/O calls to Redis from the API hot-path (and delegating them fully to background Kafka Streams consumer event loops), the application achieves a **~2.6x increase in write-throughput concurrency** (227 ops/s up from 85 ops/s) under extreme load (500 threads).
+**Note on Redis Sync Optimization:** By eliminating redundant, blocking network I/O calls to Redis from the API hot-path (and delegating asynchronous event processing to the Redis Streams `events:queue` and `ScheduledBatchProcessor` flow), the application achieves a **~2.6x increase in write-throughput concurrency** (227 ops/s up from 85 ops/s) under extreme load (500 threads).
 
 **Key Takeaways:**
 - **Zero-Serialization Reads**: Utilizing a multi-layered local Caffeine cache in combination with Redis materialized views allows `GET` queries to bypass JSON serialization overhead entirely. The read throughput achieves native memory-like speed.

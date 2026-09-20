@@ -27,6 +27,16 @@ Write-Output ""
 
 $endpoints = @("author_register", "post_create", "post_read", "comment_create", "comment_read", "tag_read", "post_update", "post_delete", "comment_update", "comment_delete")
 
+function Get-Stat($statsObj, $path) {
+    if ($null -eq $statsObj) { return "N/A" }
+    $val = $statsObj
+    foreach ($p in $path.Split(".")) {
+        if ($null -ne $val) { $val = $val.$p }
+    }
+    if ($null -eq $val) { return "N/A" }
+    return $val
+}
+
 foreach ($endpoint in $endpoints) {
     $bEnd = $base.contents.$endpoint
     $nEnd = $new.contents.$endpoint
@@ -40,16 +50,6 @@ foreach ($endpoint in $endpoints) {
     if ($null -ne $bEnd) { $bStats = $bEnd.stats } else { $bStats = $null }
     if ($null -ne $nEnd) { $nStats = $nEnd.stats } else { $nStats = $null }
 
-    function Get-Stat($statsObj, $path) {
-        if ($null -eq $statsObj) { return "N/A" }
-        $val = $statsObj
-        foreach ($p in $path.Split(".")) {
-            if ($null -ne $val) { $val = $val.$p }
-        }
-        if ($null -eq $val) { return "N/A" }
-        return $val
-    }
-    
     $bRps = Get-Stat $bStats "meanNumberOfRequestsPerSecond.total"
     $nRps = Get-Stat $nStats "meanNumberOfRequestsPerSecond.total"
     $dRps = if ($bRps -ne "N/A" -and $nRps -ne "N/A") { [math]::Round($nRps - $bRps, 2) } else { "N/A" }

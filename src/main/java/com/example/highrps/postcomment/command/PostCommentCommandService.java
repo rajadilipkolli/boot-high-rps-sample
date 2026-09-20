@@ -211,11 +211,13 @@ public class PostCommentCommandService extends AbstractCommandService {
                         log.warn("Failed to invalidate local cache for comment: {}", commentId.id(), e);
                     }
                     // 3. Queue the marker behind pending Redis writes and wait for the deletion barrier
-                    redisWriteQueue.enqueue(cacheKey, () -> {
-                        deletionMarkerHandler.markDeleted(DeletionMarkerHandler.POST_COMMENT, cacheKey);
-                        postCommentRedisRepository.deleteById(String.valueOf(commentId.id()));
-                        return CompletableFuture.completedFuture(null);
-                    });
+                    redisWriteQueue
+                            .enqueue(cacheKey, () -> {
+                                deletionMarkerHandler.markDeleted(DeletionMarkerHandler.POST_COMMENT, cacheKey);
+                                postCommentRedisRepository.deleteById(String.valueOf(commentId.id()));
+                                return CompletableFuture.completedFuture(null);
+                            })
+                            .join();
                 },
                 "delete post comment",
                 "PostComment");
