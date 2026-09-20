@@ -9,7 +9,7 @@ import java.util.List;
 
 /**
  * Domain event published when a post is updated.
- * This event is externalized to Kafka topic 'posts-aggregates'.
+ * This event is externalized to Redis Stream 'posts-aggregates'.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record PostUpdatedEvent(

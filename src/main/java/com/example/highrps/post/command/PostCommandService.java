@@ -123,7 +123,7 @@ public class PostCommandService extends AbstractCommandService {
                 now,
                 detailsResponse,
                 tags);
-        // Send directly to Kafka
+        // Send directly to Redis Stream
         PostCommandResult result = new PostCommandResult(
                 cmd.postId(),
                 cmd.title(),
@@ -198,7 +198,7 @@ public class PostCommandService extends AbstractCommandService {
                 now,
                 detailsResponse,
                 tags);
-        // Send directly to Kafka
+        // Send directly to Redis Stream
 
         PostCommandResult result = new PostCommandResult(
                 cmd.postId(),

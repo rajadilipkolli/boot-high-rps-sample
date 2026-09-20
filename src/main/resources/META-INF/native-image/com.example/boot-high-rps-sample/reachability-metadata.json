@@ -87,15 +87,15 @@
       "allDeclaredFields": true
     },
     {
-      "condition": {"typeReached": "com.example.highrps.infrastructure.kafka.batch.ScheduledBatchProcessor$PayloadOrTombstone"},
-      "type": "com.example.highrps.infrastructure.kafka.batch.ScheduledBatchProcessor$PayloadOrTombstone",
+      "condition": {"typeReached": "com.example.highrps.infrastructure.batch.ScheduledBatchProcessor$PayloadOrTombstone"},
+      "type": "com.example.highrps.infrastructure.batch.ScheduledBatchProcessor$PayloadOrTombstone",
       "allDeclaredConstructors": true,
       "allDeclaredMethods": true,
       "allDeclaredFields": true
     },
     {
-      "condition": {"typeReached": "com.example.highrps.infrastructure.kafka.batch.ScheduledBatchProcessor$QueueItem"},
-      "type": "com.example.highrps.infrastructure.kafka.batch.ScheduledBatchProcessor$QueueItem",
+      "condition": {"typeReached": "com.example.highrps.infrastructure.batch.ScheduledBatchProcessor$QueueItem"},
+      "type": "com.example.highrps.infrastructure.batch.ScheduledBatchProcessor$QueueItem",
       "allDeclaredConstructors": true,
       "allDeclaredMethods": true,
       "allDeclaredFields": true
@@ -353,22 +353,6 @@
     {
       "condition": {"typeReached": "com.example.highrps.shared.DomainException"},
       "type": "com.example.highrps.shared.DomainException",
-      "allDeclaredConstructors": true,
-      "allDeclaredMethods": true,
-      "allDeclaredFields": true,
-      "serializable": true
-    },
-    {
-      "condition": {"typeReached": "com.example.highrps.shared.KafkaPublishException"},
-      "type": "com.example.highrps.shared.KafkaPublishException",
-      "allDeclaredConstructors": true,
-      "allDeclaredMethods": true,
-      "allDeclaredFields": true,
-      "serializable": true
-    },
-    {
-      "condition": {"typeReached": "com.example.highrps.shared.KafkaPublishPendingException"},
-      "type": "com.example.highrps.shared.KafkaPublishPendingException",
       "allDeclaredConstructors": true,
       "allDeclaredMethods": true,
       "allDeclaredFields": true,

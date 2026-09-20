@@ -1,13 +1,11 @@
 package com.example.highrps.postcomment.query;
 
 import com.example.highrps.infrastructure.cache.CacheKeyGenerator;
-import com.example.highrps.infrastructure.cache.RequestCoalescer;
 import com.example.highrps.postcomment.command.PostCommentCommandResult;
 import com.example.highrps.postcomment.domain.PostCommentMapper;
 import com.example.highrps.postcomment.domain.PostCommentRedis;
 import com.example.highrps.postcomment.domain.PostCommentRedisRepository;
 import com.example.highrps.postcomment.domain.PostCommentRepository;
-import com.example.highrps.postcomment.domain.PostCommentRequest;
 import com.example.highrps.shared.ResourceNotFoundException;
 import com.example.highrps.shared.redis.DeletionMarkerHandler;
 import com.github.benmanes.caffeine.cache.Cache;
@@ -32,7 +30,6 @@ public class PostCommentQueryService {
     private final PostCommentMapper postCommentMapper;
     private final Cache<String, String> localCache;
     private final PostCommentRedisRepository postCommentRedisRepository;
-    private final RequestCoalescer<PostCommentRequest> requestCoalescer;
     private final DeletionMarkerHandler deletionMarkerHandler;
 
     public PostCommentQueryService(
@@ -46,7 +43,6 @@ public class PostCommentQueryService {
         this.localCache = localCache;
         this.postCommentRedisRepository = postCommentRedisRepository;
         this.deletionMarkerHandler = deletionMarkerHandler;
-        this.requestCoalescer = new RequestCoalescer<>();
     }
 
     /**
