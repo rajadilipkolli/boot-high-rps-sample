@@ -1,11 +1,13 @@
 package com.example.highrps.post.query;
 
-import com.example.highrps.infrastructure.cache.RequestCoalescer;
-import com.example.highrps.post.domain.*;
-import com.example.highrps.post.domain.requests.NewPostRequest;
+import com.example.highrps.post.domain.PostRedis;
+import com.example.highrps.post.domain.PostRedisRepository;
+import com.example.highrps.post.domain.PostRepository;
+import com.example.highrps.post.mapper.PostEntityToPostProjectionMapper;
 import com.example.highrps.shared.ResourceNotFoundException;
 import com.example.highrps.shared.redis.DeletionMarkerHandler;
 import com.github.benmanes.caffeine.cache.Cache;
+import java.util.List;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,7 +28,7 @@ public class PostQueryService {
     private final Cache<String, String> localCache;
     private final PostRedisRepository postRedisRepository;
     private final DeletionMarkerHandler deletionMarkerHandler;
-    private final RequestCoalescer<NewPostRequest> requestCoalescer;
+    private final PostEntityToPostProjectionMapper postEntityToPostProjectionMapper;
     private final JsonMapper jsonMapper;
     private final PostRepository postRepository;
 
@@ -38,19 +40,21 @@ public class PostQueryService {
      * @param postRepository database post repository
      * @param jsonMapper serializer for cached values
      * @param deletionMarkerHandler handler for deleted aggregates
+     * @param postEntityToPostProjectionMapper mapper for converting PostEntity to PostProjection
      */
     public PostQueryService(
             Cache<String, String> localCache,
             PostRedisRepository postRedisRepository,
             PostRepository postRepository,
             JsonMapper jsonMapper,
-            DeletionMarkerHandler deletionMarkerHandler) {
+            DeletionMarkerHandler deletionMarkerHandler,
+            PostEntityToPostProjectionMapper postEntityToPostProjectionMapper) {
         this.localCache = localCache;
         this.postRedisRepository = postRedisRepository;
         this.postRepository = postRepository;
+        this.postEntityToPostProjectionMapper = postEntityToPostProjectionMapper;
         this.jsonMapper = jsonMapper;
         this.deletionMarkerHandler = deletionMarkerHandler;
-        this.requestCoalescer = new RequestCoalescer<>();
     }
 
     /**
@@ -99,7 +103,7 @@ public class PostQueryService {
                 .findByPostRefId(postId)
                 .map(entity -> {
                     log.debug("Hit DB for postId: {}", postId);
-                    PostProjection projection = fromEntity(entity);
+                    PostProjection projection = postEntityToPostProjectionMapper.fromEntity(entity);
                     try {
                         String jsonStr = jsonMapper.writeValueAsString(projection);
                         localCache.put(cacheKey, jsonStr);
@@ -128,36 +132,6 @@ public class PostQueryService {
     }
 
     /**
-     * Maps a database post to its read projection.
-     *
-     * @param entity the database post
-     * @return the post projection
-     */
-    private PostProjection fromEntity(PostEntity entity) {
-        return new PostProjection(
-                entity.getPostRefId(),
-                entity.getTitle(),
-                entity.getContent(),
-                entity.getAuthorEntity().getEmail(),
-                entity.isPublished(),
-                entity.getPublishedAt(),
-                entity.getCreatedAt(),
-                entity.getModifiedAt(),
-                entity.getDetails() == null
-                        ? null
-                        : new PostDetailsResponse(
-                                entity.getDetails().getDetailsKey(),
-                                entity.getDetails().getCreatedAt(),
-                                entity.getDetails().getCreatedBy()),
-                entity.getTags().stream()
-                        .map(postTag -> {
-                            TagEntity tag = postTag.getTagEntity();
-                            return new TagResponse(tag.getId(), tag.getTagName(), tag.getTagDescription());
-                        })
-                        .toList());
-    }
-
-    /**
      * Maps a Redis post to its read projection.
      *
      * @param postRedis the cached post
@@ -174,34 +148,6 @@ public class PostQueryService {
                 postRedis.getCreatedAt(),
                 postRedis.getModifiedAt(),
                 postRedis.getDetails(),
-                postRedis.getTags());
-    }
-
-    private PostProjection fromNewPostRequest(NewPostRequest request) {
-        return new PostProjection(
-                request.postId(),
-                request.title(),
-                request.content(),
-                request.email(),
-                request.published() != null && request.published(),
-                request.publishedAt(),
-                request.createdAt(),
-                request.modifiedAt(),
-                request.details(),
-                request.tags());
-    }
-
-    private PostRedis toRedis(NewPostRequest request, Long postId) {
-        return new PostRedis()
-                .setId(postId)
-                .setTitle(request.title())
-                .setContent(request.content())
-                .setPublished(request.published() != null && request.published())
-                .setPublishedAt(request.publishedAt())
-                .setAuthorEmail(request.email())
-                .setCreatedAt(request.createdAt())
-                .setModifiedAt(request.modifiedAt())
-                .setDetails(request.details())
-                .setTags(request.tags());
+                postRedis.getTags() != null ? postRedis.getTags() : List.of());
     }
 }

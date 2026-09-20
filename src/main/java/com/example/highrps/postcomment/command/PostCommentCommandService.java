@@ -56,7 +56,6 @@ public class PostCommentCommandService extends AbstractCommandService {
      *
      * @param postQueryService post read service
      * @param postCommentQueryService comment read service
-     * @param kafkaTemplate publisher for comment events
      * @param localCache local comment cache
      * @param postCommentMapper comment mapper
      * @param meterRegistry metrics registry
@@ -215,6 +214,7 @@ public class PostCommentCommandService extends AbstractCommandService {
                     redisWriteQueue
                             .enqueue(cacheKey, () -> {
                                 deletionMarkerHandler.markDeleted(DeletionMarkerHandler.POST_COMMENT, cacheKey);
+                                postCommentRedisRepository.deleteById(cacheKey);
                                 return CompletableFuture.completedFuture(null);
                             })
                             .join();

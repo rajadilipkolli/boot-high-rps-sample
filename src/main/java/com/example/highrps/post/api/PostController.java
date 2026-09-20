@@ -72,7 +72,7 @@ public class PostController {
      * Updates a post.
      *
      * @param postId the post identifier
-     * @param updatePostRequest the replacement post details
+     * @param newPostRequest the replacement post details
      * @return a future containing the updated post response
      */
     @PutMapping(

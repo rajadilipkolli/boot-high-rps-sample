@@ -44,7 +44,6 @@ public class PostCommandService extends AbstractCommandService {
     /**
      * Creates a post command service with its event, cache, and persistence collaborators.
      *
-     * @param kafkaTemplate publisher for post events
      * @param localCache local post cache
      * @param postRedisRepository Redis post repository
      * @param deletionMarkerHandler handler for deleted aggregates
@@ -249,8 +248,14 @@ public class PostCommandService extends AbstractCommandService {
                         log.warn("Failed to invalidate local cache for post: {}", postId, e);
                     }
 
-                    // 3. Mark deleted in Redis with TTL (prevents batch re-insertion)
-                    deletionMarkerHandler.markDeleted(DeletionMarkerHandler.POST, String.valueOf(postId));
+                    // 3. Queue the marker and delete behind pending Redis writes
+                    redisWriteQueue
+                            .enqueue(cacheKey, () -> {
+                                deletionMarkerHandler.markDeleted(DeletionMarkerHandler.POST, String.valueOf(postId));
+                                postRedisRepository.deleteById(postId);
+                                return CompletableFuture.completedFuture(null);
+                            })
+                            .join();
                 },
                 "delete post",
                 "Post");

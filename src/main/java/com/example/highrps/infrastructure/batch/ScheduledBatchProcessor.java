@@ -1,10 +1,9 @@
-package com.example.highrps.infrastructure.kafka.batch;
+package com.example.highrps.infrastructure.batch;
 
 import com.example.highrps.shared.config.AppProperties;
 import com.example.highrps.shared.redis.DeletionMarkerHandler;
 import io.github.resilience4j.bulkhead.annotation.Bulkhead;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
-import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.PostConstruct;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
@@ -41,7 +40,6 @@ public class ScheduledBatchProcessor {
     private final DeletionMarkerHandler deletionMarkerHandler;
 
     private final String consumerName;
-    private final MeterRegistry meterRegistry;
     private final AppProperties appProperties;
 
     private record QueueItem(String recordId, String payload) {}
@@ -51,13 +49,11 @@ public class ScheduledBatchProcessor {
             JsonMapper jsonMapper,
             List<EntityBatchProcessor> processors,
             AppProperties appProperties,
-            DeletionMarkerHandler deletionMarkerHandler,
-            MeterRegistry meterRegistry) {
+            DeletionMarkerHandler deletionMarkerHandler) {
         this.redis = redis;
         this.jsonMapper = jsonMapper;
         this.appProperties = appProperties;
         this.deletionMarkerHandler = deletionMarkerHandler;
-        this.meterRegistry = meterRegistry;
         this.consumerName = createConsumerName(getHostname(), UUID.randomUUID());
 
         // Build registry of processors by entity type
