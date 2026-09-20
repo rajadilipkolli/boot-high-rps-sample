@@ -95,5 +95,5 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: gatling-smoke-report
-          path: boot-high-rps-sample/target/gatling/
+          path: target/gatling/
           retention-days: 14
