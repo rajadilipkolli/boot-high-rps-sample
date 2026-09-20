@@ -11,31 +11,30 @@ Summary
 
 Architecture mapping to this project
 - Controller: `PostController` — lightweight synchronous handlers running on virtual threads.
-- Producer: `KafkaProducerService` — publishes `EventDto` to topic `events`.
-- Streams: `StreamsTopology` — consumes `events`, reduces latest `value` per key, materializes persistent store `posts-store` (String), and emits `posts-aggregates` as strings.
-- Materializer: `AggregatesToRedisListener` — consumes `posts-aggregates` and writes JSON into `posts:{id}` Redis keys.
-- API fallback: `PostService` — cache → Redis → Kafka Streams interactive query (`posts-store`).
-- DB writer: `ScheduledBatchProcessor` — pops from `events:queue` and persists to DB asynchronously.
+- Command Services: `AbstractCommandService` and its implementations — handle business logic and publish events.
+- Event Stream: The `events:queue` Redis Stream.
+- DB Writer: `ScheduledBatchProcessor` using `EntityBatchProcessor` implementations to process batches from the stream and persist to PostgreSQL asynchronously.
+- Materialized Views: Redis materialized view repositories (`authors:entity`, `posts:entity`, `post-comments:entity`).
 
-Kafka topics used
-- `events` — raw events (EventDto JSON). Produced by APIs when publishing events.
-- `posts-aggregates` — string aggregates emitted by Kafka Streams. Consumed by Redis materializer.
-
-Do we need 3 topics?
-
-Currently this module uses 4 application-level topics: `events`, `posts-aggregates`, `authors-aggregates`, and `post-comments-aggregates`.
-Kafka Streams will create internal changelog topics for state stores automatically. The blueprint sometimes describes a third topic for pre-aggregation or durable event storage, but in practice the Streams changelog covers that need. If you want a dedicated changelog-like topic for manual inspection or a separate compaction policy, you can add it, but it's not required for correctness.
+Redis Streams used
+- `events:queue` — the single stream for raw events (EventDto JSON). Produced by APIs when publishing events.
+- `events:dlq` — dead-letter stream for events that fail processing.
 
 Redis keys
-- `posts:{id}` — materialized JSON aggregate used by API reads.
-- `events:queue` — list used for batch DB writes (pushed on publish).
+- `events:queue` — stream used for asynchronous event processing.
+- `events:dlq` — dead-letter stream for failed events.
+- `authors:entity`, `posts:entity`, `post-comments:entity` — `@RedisHash` materialized-view keys used by API reads.
+- `deleted:{entityType}:{key}` — tombstone keys used to mark soft-deleted entities.
 
 Run & smoke test (local)
 1. Start infra (docker compose):
 
 ```powershell
-docker compose up -d kafka redis postgres
+docker compose up -d postgresqldb
+docker run -p 6379:6379 redis:alpine
 ```
+
+Note that the standalone `redis` service block in `docker/docker-compose.yml` is currently commented out and must be enabled, or Redis must be started separately. Do not recommend `docker/docker-compose-sentinel.yml` for local smoke tests; it is a load-test-only HA topology.
 
 2. Build and run the app:
 
@@ -64,8 +63,8 @@ curl http://localhost:8080/api/posts/<postId>
 Production tuning notes
 - Enable virtual threads: `spring.threads.virtual.enabled=true` (already present).
 - Redis: use Lettuce with high pool sizes, tune `max-active`, `max-wait`, and timeouts for your workload.
-- Kafka: consider compacted topics for long-lived aggregate streams; monitor state store restorations and tune partitions.
-- Kafka Streams: ensure sufficient partitions and state-store placement to handle load.
+- Redis Streams: tune consumer groups and batch sizes.
+- Redis Sentinel: use the Redis Sentinel production topology (`spring.data.redis.sentinel.*`).
 - JVM: prefer ZGC for low pause times; size heap conservatively.
 
 ## Multi-Node Deployment Consistency
@@ -74,9 +73,9 @@ To ensure the application functions correctly in a multi-node (load-balanced) di
 
 When an entity (Author, Post, PostComment) is created or updated:
 1. The API's `CommandService` validates the request and synchronously writes the updated state directly to the shared distributed cache (**Redis**).
-2. Simultaneously, it fires an asynchronous event to **Kafka** for durable event-sourcing and subsequent batch processing to the database.
+2. Simultaneously, it fires an asynchronous event via Redis Stream append to `events:queue` for durable event-sourcing and subsequent consumer-group batch processing to the database.
 
-Because Redis is updated synchronously on the API hot path, if a client creates a record on Node A and their subsequent `GET` request is routed to Node B, Node B will immediately find the fresh record in the shared Redis cluster. This avoids eventual consistency gaps (e.g., returning a `404 Not Found`) that would occur if the application relied solely on asynchronous Kafka consumers to populate the cache.
+Because Redis is updated synchronously on the API hot path, if a client creates a record on Node A and their subsequent `GET` request is routed to Node B, Node B will immediately find the fresh record in the shared Redis cluster. Local Caffeine cache staleness across instances is bounded by the 5-minute `expireAfterWrite` TTL, since the Redis Pub/Sub invalidation infrastructure exists but is not currently wired.
 
 Suggestions & next steps
 - Add an HTTP readiness probe that confirms `posts-store` is queryable before serving interactive queries.
@@ -99,8 +98,8 @@ We ran JMH benchmarks on the local environment simulating a workload of 90% read
 **Note on Redis Sync Optimization:** By eliminating redundant, blocking network I/O calls to Redis from the API hot-path (and delegating them fully to background Kafka Streams consumer event loops), the application achieves a **~2.6x increase in write-throughput concurrency** (227 ops/s up from 85 ops/s) under extreme load (500 threads).
 
 **Key Takeaways:**
-- **Zero-Serialization Reads**: Utilizing a multi-layered local Caffeine cache in combination with Redis and Kafka Streams State Stores allows `GET` queries to bypass JSON serialization overhead entirely. The read throughput achieves native memory-like speed.
-- **N+1 Optimization**: During heavy load (500 concurrent connections), the background Kafka-to-PostgreSQL batch processors initially timed out. Pre-extracting aggregate data and doing singular bulk queries (`findByEmailInAllIgnoreCase`, `findByTagNameInAllIgnoreCase`) solved the issue, eliminating all `BatchUpdateException` errors.
+- **Zero-Serialization Reads**: Utilizing a multi-layered local Caffeine cache in combination with Redis materialized views allows `GET` queries to bypass JSON serialization overhead entirely. The read throughput achieves native memory-like speed.
+- **N+1 Optimization**: During heavy load (500 concurrent connections), the background Redis Streams batch processors initially timed out. Pre-extracting aggregate data and doing singular bulk queries (`findByEmailInAllIgnoreCase`, `findByTagNameInAllIgnoreCase`) solved the issue, eliminating all `BatchUpdateException` errors.
 - The 100-thread setup is the sweet spot for maximizing JMH throughput locally before Tomcat and the JVM experience excessive context switching overhead.
 
 

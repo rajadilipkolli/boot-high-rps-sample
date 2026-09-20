@@ -6,7 +6,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
  * Tombstone event published when a post is deleted.
- * This event is externalized to Kafka topic 'posts-aggregates' as a tombstone
+ * This event is externalized to Redis Stream 'posts-aggregates' as a tombstone
  * (null value).
  */
 @JsonIgnoreProperties(ignoreUnknown = true)

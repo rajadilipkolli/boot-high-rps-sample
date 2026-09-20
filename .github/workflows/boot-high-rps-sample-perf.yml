@@ -8,7 +8,7 @@ on:
       profile:
         description: 'Load Profile (normal, high, stress)'
         required: true
-        default: 'normal'
+        default: 'high'
       durationMinutes:
         description: 'Duration (minutes)'
         required: false
@@ -93,16 +93,16 @@ jobs:
           if [[ -d target/gatling ]]; then
             STATS_FILE=$(find target/gatling -name "stats.json" -print -quit)
             if [[ -n "$STATS_FILE" && -f "$STATS_FILE" ]]; then
-              cp "$STATS_FILE" ../stats.json
+              cp "$STATS_FILE" stats.json
             fi
-            mv target/gatling ../gatling-report
+            mv target/gatling gatling-report
           fi
 
       - name: Compare Results
         if: ${{ always() }}
         run: |
-          if [ -f ../docs/baselines/main-baseline.json ]; then
-            pwsh ./scripts/compare-results.ps1 -BaselineStats ../docs/baselines/main-baseline.json -NewStats ../stats.json > comparison.md
+          if [ -f docs/baselines/main-baseline.json ]; then
+            pwsh ./scripts/compare-results.ps1 -BaselineStats docs/baselines/main-baseline.json -NewStats stats.json > comparison.md
             cat comparison.md >> $GITHUB_STEP_SUMMARY
           else
             echo "No baseline found to compare against. This run will establish the first baseline." >> $GITHUB_STEP_SUMMARY
@@ -119,11 +119,11 @@ jobs:
       - name: Update baseline on main branch
         if: success() && github.ref == 'refs/heads/main'
         run: |
-          mkdir -p ../docs/baselines
-          cp ../stats.json ../docs/baselines/main-baseline.json
+          mkdir -p docs/baselines
+          cp stats.json docs/baselines/main-baseline.json
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add ../docs/baselines/main-baseline.json
+          git add docs/baselines/main-baseline.json
           if git diff --staged --quiet; then
             echo "Baseline unchanged."
           else

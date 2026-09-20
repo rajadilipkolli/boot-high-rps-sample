@@ -96,7 +96,7 @@ public class AuthorCommandService extends AbstractCommandService {
             throw new ResourceConflictException("Author already exists with email: " + cmd.email());
         }
 
-        // Publish domain event directly to Kafka
+        // Publish domain event directly to Redis Stream
         AuthorCreatedEvent event = new AuthorCreatedEvent(
                 aggregateKey, cmd.firstName(), cmd.middleName(), cmd.lastName(), cmd.mobile(), cmd.createdAt());
         // Build result

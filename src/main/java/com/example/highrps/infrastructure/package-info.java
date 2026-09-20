@@ -5,7 +5,7 @@
  * This module provides cross-cutting infrastructure concerns for the
  * application:
  * - Caching (Caffeine, Redis)
- * - Kafka integration and batch processing
+ * - Redis Stream integration and batch processing
  * - Persistence configuration (JPA auditing)
  *
  * <p>

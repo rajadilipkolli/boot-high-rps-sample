@@ -9,7 +9,7 @@ import java.util.List;
 
 /**
  * Domain event published when a new post is created.
- * This event is externalized to Kafka topic 'posts-aggregates' for downstream
+ * This event is externalized to Redis Stream 'posts-aggregates' for downstream
  * consumers.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
