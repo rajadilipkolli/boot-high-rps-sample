@@ -9,6 +9,11 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record PostCommentDeletedEvent(Long commentId, Long postId) implements DomainEvent {
+    /**
+     * Indicates that this event is a deletion tombstone.
+     *
+     * @return always {@code true}
+     */
     @JsonProperty("__deleted")
     public boolean isDeleted() {
         return true;

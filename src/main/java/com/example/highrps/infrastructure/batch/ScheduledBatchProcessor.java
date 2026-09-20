@@ -44,6 +44,15 @@ public class ScheduledBatchProcessor {
 
     private record QueueItem(String recordId, String payload) {}
 
+    /**
+     * Creates a scheduled processor for draining Redis streams into entity-specific batch processors.
+     *
+     * @param redis Redis stream operations
+     * @param jsonMapper serializer used for stream payloads
+     * @param processors available entity-specific processors
+     * @param appProperties application batch settings
+     * @param deletionMarkerHandler handler for recently deleted entities
+     */
     public ScheduledBatchProcessor(
             RedisTemplate<String, String> redis,
             JsonMapper jsonMapper,

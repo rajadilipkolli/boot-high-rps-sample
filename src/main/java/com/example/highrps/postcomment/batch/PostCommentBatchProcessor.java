@@ -184,6 +184,12 @@ public class PostCommentBatchProcessor implements EntityBatchProcessor {
         }
     }
 
+    /**
+     * Extracts the composite post and comment identifier from a comment payload.
+     *
+     * @param payload serialized comment event or command result
+     * @return the composite key, or {@code null} when the payload has no usable identifiers
+     */
     @Override
     public String extractKey(String payload) {
         try {

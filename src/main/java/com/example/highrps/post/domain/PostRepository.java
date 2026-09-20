@@ -16,6 +16,12 @@ public interface PostRepository extends JpaRepository<PostEntity, Long> {
     @EntityGraph(attributePaths = {"tags", "details", "authorEntity", "tags.tagEntity"})
     List<PostEntity> findByPostRefIdIn(List<Long> postRefIds);
 
+    /**
+     * Deletes posts whose external identifiers match the supplied values.
+     *
+     * @param postRefIds external post identifiers to delete
+     * @return the number of deleted posts
+     */
     @Transactional
     long deleteByPostRefIdIn(List<Long> postRefIds);
 }

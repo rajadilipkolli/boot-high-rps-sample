@@ -12,10 +12,22 @@ import org.mapstruct.NullValueCheckStrategy;
 @Mapper(componentModel = MappingConstants.ComponentModel.SPRING, nullValueCheckStrategy = NullValueCheckStrategy.ALWAYS)
 public interface PostEntityToPostProjectionMapper {
 
+    /**
+     * Maps a persisted post to its read projection.
+     *
+     * @param postEntity persisted post
+     * @return the corresponding read projection
+     */
     @Mapping(target = "authorEmail", source = "authorEntity.email")
     @Mapping(target = "postId", source = "postRefId")
     PostProjection fromEntity(PostEntity postEntity);
 
+    /**
+     * Maps a post-tag association to its tag response.
+     *
+     * @param postTagEntity persisted post-tag association
+     * @return the corresponding tag response
+     */
     @Mapping(target = "tagName", source = "tagEntity.tagName")
     @Mapping(target = "tagDescription", source = "tagEntity.tagDescription")
     @Mapping(target = "id", source = "tagEntity.id")

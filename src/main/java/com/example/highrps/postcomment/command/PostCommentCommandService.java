@@ -214,7 +214,7 @@ public class PostCommentCommandService extends AbstractCommandService {
                     redisWriteQueue
                             .enqueue(cacheKey, () -> {
                                 deletionMarkerHandler.markDeleted(DeletionMarkerHandler.POST_COMMENT, cacheKey);
-postCommentRedisRepository.deleteById(String.valueOf(commentId.id()));
+                                postCommentRedisRepository.deleteById(String.valueOf(commentId.id()));
                                 return CompletableFuture.completedFuture(null);
                             })
                             .join();
