@@ -1,4 +1,4 @@
-package com.example.highrps.infrastructure.kafka.batch;
+package com.example.highrps.infrastructure.batch;
 
 import java.util.List;
 

@@ -1,6 +1,6 @@
 package com.example.highrps.postcomment.batch;
 
-import com.example.highrps.infrastructure.kafka.batch.EntityBatchProcessor;
+import com.example.highrps.infrastructure.batch.EntityBatchProcessor;
 import com.example.highrps.post.domain.PostEntity;
 import com.example.highrps.post.domain.PostRepository;
 import com.example.highrps.postcomment.command.PostCommentCommandResult;
@@ -184,15 +184,23 @@ public class PostCommentBatchProcessor implements EntityBatchProcessor {
         }
     }
 
+    /**
+     * Extracts the composite post and comment identifier from a comment payload.
+     *
+     * @param payload serialized comment event or command result
+     * @return the composite key, or {@code null} when the payload has no usable identifiers
+     */
     @Override
     public String extractKey(String payload) {
         try {
             var node = jsonMapper.readTree(payload);
-            // PostCommentCommandResult uses 'id' for the comment reference ID
-            String commentIdStr = node.path("id").asString();
+            // PostCommentCreatedEvent uses 'commentId', but result uses 'id'
+            String commentIdStr = node.has("commentId")
+                    ? node.path("commentId").asString()
+                    : node.path("id").asString();
             String postIdStr = node.path("postId").asString();
             if (commentIdStr.isEmpty() || postIdStr.isEmpty()) {
-                log.warn("Missing 'id' or 'postId' field in comment payload: {}", payload);
+                log.warn("Missing 'id'/'commentId' or 'postId' field in comment payload: {}", payload);
                 return null;
             }
             return postIdStr + ":" + commentIdStr;

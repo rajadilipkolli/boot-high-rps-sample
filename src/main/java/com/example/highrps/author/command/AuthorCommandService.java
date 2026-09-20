@@ -41,7 +41,6 @@ public class AuthorCommandService extends AbstractCommandService {
     /**
      * Creates an author command service with its event, cache, and persistence collaborators.
      *
-     * @param kafkaTemplate publisher for author events
      * @param localCache local author cache
      * @param deletionMarkerHandler handler for deleted aggregates
      * @param authorQueryService author read service
@@ -188,6 +187,7 @@ public class AuthorCommandService extends AbstractCommandService {
                     // 3. Mark deleted in Redis with TTL (prevents batch re-insertion)
                     try {
                         deletionMarkerHandler.markDeleted(DeletionMarkerHandler.AUTHOR, aggregateKey);
+                        authorRedisRepository.deleteById(aggregateKey);
                     } catch (Exception e) {
                         log.warn("Failed to mark author deleted in Redis: {}", aggregateKey, e);
                     }

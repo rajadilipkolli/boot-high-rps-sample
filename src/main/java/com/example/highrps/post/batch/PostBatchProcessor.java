@@ -2,7 +2,7 @@ package com.example.highrps.post.batch;
 
 import com.example.highrps.author.domain.AuthorEntity;
 import com.example.highrps.author.domain.AuthorRepository;
-import com.example.highrps.infrastructure.kafka.batch.EntityBatchProcessor;
+import com.example.highrps.infrastructure.batch.EntityBatchProcessor;
 import com.example.highrps.post.domain.PostEntity;
 import com.example.highrps.post.domain.PostRepository;
 import com.example.highrps.post.domain.TagEntity;

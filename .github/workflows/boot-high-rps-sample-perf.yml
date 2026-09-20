@@ -84,108 +84,25 @@ jobs:
           printf 'COMMENT_DELETE_WEIGHT=%s\n' "$COMMENT_DELETE_WEIGHT" >> "$GITHUB_ENV"
           printf 'CURRENT_HEAD=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
-      - name: Run Gatling Tests
+      - name: Run Gatling Tests against HEAD
         run: |
-          APP_PID=""
-          cleanup() {
-            if [[ -n "$APP_PID" ]] && kill -0 "$APP_PID" 2>/dev/null; then
-              kill "$APP_PID"
-            fi
-            docker compose -f docker/docker-compose.yml down -v || true
-            if [ -f docker/docker-compose-monitoring.yml ]; then
-              docker compose -f docker/docker-compose-monitoring.yml -f docker/docker-compose-sentinel.yml down -v || true
-            fi
-          }
-          trap cleanup EXIT
-
-          # Checkout HEAD
-          git checkout "$CURRENT_HEAD"
+          # We are already on the triggered commit (HEAD)
+          pwsh ./scripts/test-local.ps1 -Profile $PROFILE -DurationMinutes $DURATION -WarmupMinutes 0
           
-          # Start Infra and Monitoring
-          docker compose -f docker/docker-compose.yml up -d
-          if [ -f docker/docker-compose-monitoring.yml ]; then
-            docker compose -f docker/docker-compose-monitoring.yml up -d
-          fi
-          
-          # Build & Start App
-          ./mvnw -DskipTests clean package
-          java -jar target/boot-high-rps-sample-0.1.0-SNAPSHOT.jar --spring.profiles.active=local \
-            > "$RUNNER_TEMP/head-app.log" 2>&1 &
-          APP_PID=$!
-
-          echo "Waiting for /actuator/health to report UP..."
-          deadline=$((SECONDS + 120))
-          until curl --fail --silent --show-error --max-time 5 http://localhost:8080/actuator/health \
-            | grep -q '"status":"UP"'; do
-            if (( SECONDS >= deadline )); then
-              echo "::error::HEAD application did not become healthy within 120 seconds"
-              ps -p "$APP_PID" -f || true
-              tail -n 200 "$RUNNER_TEMP/head-app.log" || true
-              docker compose -f docker/docker-compose.yml ps || true
-              docker compose -f docker/docker-compose.yml logs --no-color --tail=100 || true
-              exit 1
-            fi
-            sleep 2
-          done
-          
-          # Generate Data
-          ./mvnw exec:java -Dexec.mainClass="com.example.highrps.gatling.setup.DataGenerator" \
-            -Dexec.classpathScope=test -DdataDir=target/loadtest-data -Dprofile=$PROFILE -DdataSeed=2674
-          
-          # Run Gatling
-          MAVEN_ARGS=(-Dprofile="$PROFILE" -DdurationMinutes="$DURATION" -DpostUpdateWeight="$POST_UPDATE_WEIGHT" -DpostDeleteWeight="$POST_DELETE_WEIGHT" -DcommentUpdateWeight="$COMMENT_UPDATE_WEIGHT" -DcommentDeleteWeight="$COMMENT_DELETE_WEIGHT")
-          if [[ -n "$TARGET_RPS" ]]; then
-            MAVEN_ARGS+=(-DtargetRps="$TARGET_RPS")
-          fi
-          set +e
-          ./mvnw gatling:test "${MAVEN_ARGS[@]}"
-          GATLING_STATUS=$?
-          set -e
-         
           # Save Stats
           if [[ -d target/gatling ]]; then
-            LATEST_HTML=$(find target/gatling -name "index.html" -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n1 | awk '{print $2}')
-            if [[ -n "${LATEST_HTML}" ]]; then
-              python3 - "${LATEST_HTML}" > ../stats.json <<'PYEOF'
-import sys, json, re
-with open(sys.argv[1], 'r', encoding='utf-8', errors="replace") as f: html = f.read()
-cols = {}
-for i in range(2, 15):
-    m = re.search(r'<td class="value [a-z]+ col-' + str(i) + r'">([\d\.]+)</td>', html)
-    if m: cols[i] = m.group(1)
-ok_count = int(cols.get(3, 0))
-if ok_count == 0:
-    print(json.dumps({})); sys.exit(0)
-print(json.dumps({
-    "sample_count": int(cols.get(2, 0)),
-    "mean_ms": float(cols.get(13, 0)),
-    "p50_ms": float(cols.get(8, 0)),
-    "p95_ms": float(cols.get(10, 0)),
-    "p99_ms": float(cols.get(11, 0))
-}, indent=2))
-PYEOF
+            STATS_FILE=$(find target/gatling -name "stats.json" -print -quit)
+            if [[ -n "$STATS_FILE" && -f "$STATS_FILE" ]]; then
+              cp "$STATS_FILE" ../stats.json
             fi
             mv target/gatling ../gatling-report
           fi
 
-          exit "$GATLING_STATUS"
-          
       - name: Compare Results
         if: ${{ always() }}
         run: |
           if [ -f ../docs/baselines/main-baseline.json ]; then
-            python3 - ../docs/baselines/main-baseline.json ../stats.json > comparison.md <<'PYEOF'
-import sys, json
-with open(sys.argv[1], 'r') as f: base = json.load(f)
-with open(sys.argv[2], 'r') as f: new = json.load(f)
-print("## Performance Comparison")
-print("| Metric | Baseline | New | Delta |")
-print("|---|---|---|---|")
-for k in ["sample_count", "mean_ms", "p50_ms", "p95_ms", "p99_ms"]:
-    b = base.get(k, 0)
-    n = new.get(k, 0)
-    print(f"| {k} | {b} | {n} | {round(n - b, 2)} |")
-PYEOF
+            pwsh ./scripts/compare-results.ps1 -BaselineStats ../docs/baselines/main-baseline.json -NewStats ../stats.json > comparison.md
             cat comparison.md >> $GITHUB_STEP_SUMMARY
           else
             echo "No baseline found to compare against. This run will establish the first baseline." >> $GITHUB_STEP_SUMMARY

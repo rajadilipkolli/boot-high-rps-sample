@@ -4,28 +4,22 @@ import static org.springframework.boot.test.context.SpringBootTest.WebEnvironmen
 
 import com.example.highrps.HighRpsApplication;
 import com.example.highrps.author.batch.AuthorBatchProcessor;
-import com.example.highrps.author.command.AuthorCommandService;
 import com.example.highrps.author.domain.AuthorRedisRepository;
 import com.example.highrps.author.domain.AuthorRepository;
-import com.example.highrps.infrastructure.kafka.batch.ScheduledBatchProcessor;
-import com.example.highrps.post.command.PostCommandService;
+import com.example.highrps.infrastructure.batch.ScheduledBatchProcessor;
 import com.example.highrps.post.domain.PostRedisRepository;
 import com.example.highrps.post.domain.PostRepository;
 import com.example.highrps.post.domain.PostTagRepository;
 import com.example.highrps.post.domain.TagRepository;
-import com.example.highrps.postcomment.command.PostCommentCommandService;
 import com.example.highrps.postcomment.domain.PostCommentRedisRepository;
 import com.example.highrps.postcomment.domain.PostCommentRepository;
-import com.example.highrps.shared.config.AppProperties;
 import com.github.benmanes.caffeine.cache.Cache;
-import io.micrometer.core.instrument.MeterRegistry;
 import java.util.List;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.micrometer.metrics.test.autoconfigure.AutoConfigureMetrics;
 import org.springframework.boot.micrometer.tracing.test.autoconfigure.AutoConfigureTracing;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.context.ApplicationContext;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.assertj.MockMvcTester;
@@ -65,9 +59,6 @@ public abstract class AbstractIntegrationTest {
     protected PostTagRepository postTagRepository;
 
     @Autowired
-    protected MeterRegistry meterRegistry;
-
-    @Autowired
     protected AuthorRedisRepository authorRedisRepository;
 
     @Autowired
@@ -83,28 +74,9 @@ public abstract class AbstractIntegrationTest {
     protected JsonMapper jsonMapper;
 
     @Autowired
-    protected PostCommandService postCommandService;
-
-    @Autowired
-    protected AuthorCommandService authorCommandService;
-
-    @Autowired
-    protected PostCommentCommandService postCommentCommandService;
-
-    @Autowired
     protected List<ScheduledBatchProcessor> scheduledBatchProcessors;
 
-    @Autowired
-    protected AppProperties appProperties;
-
-    @Autowired
-    protected ApplicationContext applicationContext;
-
     public void clearDatabase() {
-        clearDatabase(false);
-    }
-
-    public void clearDatabase(boolean faultInjectionOptIn) {
         postCommentRepository.deleteAllInBatch();
         postTagRepository.deleteAllInBatch();
         postRepository.deleteAllInBatch();

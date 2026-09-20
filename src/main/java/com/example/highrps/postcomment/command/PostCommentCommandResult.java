@@ -1,5 +1,6 @@
 package com.example.highrps.postcomment.command;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import tools.jackson.core.JacksonException;
@@ -11,7 +12,7 @@ import tools.jackson.databind.json.JsonMapper;
  * <p>Designed for high-throughput serialization/deserialization.</p>
  */
 public record PostCommentCommandResult(
-        long id,
+        @JsonAlias("commentId") long id,
         long postId,
         String title,
         String content,

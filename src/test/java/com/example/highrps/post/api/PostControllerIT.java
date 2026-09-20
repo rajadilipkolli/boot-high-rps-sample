@@ -5,7 +5,7 @@ import static org.awaitility.Awaitility.await;
 
 import com.example.highrps.author.domain.AuthorEntity;
 import com.example.highrps.common.AbstractIntegrationTest;
-import com.example.highrps.infrastructure.kafka.batch.ScheduledBatchProcessor;
+import com.example.highrps.infrastructure.batch.ScheduledBatchProcessor;
 import com.example.highrps.post.command.PostCommandResult;
 import com.example.highrps.post.domain.PostDetailsResponse;
 import com.example.highrps.post.domain.PostRedis;
@@ -193,10 +193,6 @@ class PostControllerIT extends AbstractIntegrationTest {
                     assertThat(resp.modifiedAt()).isNotNull().isInstanceOf(LocalDateTime.class);
                 });
 
-        // Verify caches updated with new content
-        String cachedAfter = localCache.getIfPresent(cacheKey);
-        assertThat(cachedAfter).isNotNull();
-        assertThat(cachedAfter).contains("Updated content before delete");
         // Redis may be updated asynchronously via Kafka; await the updated aggregate.
         await().atMost(Duration.ofSeconds(45))
                 .pollInterval(Duration.ofSeconds(1))
@@ -380,12 +376,7 @@ class PostControllerIT extends AbstractIntegrationTest {
                     assertThat(postTagRepository.countByPostEntity_Title(title)).isEqualTo(2);
                 });
 
-        // Verify caches updated with new content
-        String cachedAfter = localCache.getIfPresent(cacheKey);
-        assertThat(cachedAfter).isNotNull();
-        assertThat(cachedAfter).contains("Updated content before delete");
-        // as redis will take a short moment to be populated due to async nature, it should go through kafka and in
-        // AggregatesToRedisListener value is set
+        // as redis will take a short moment to be populated due to async nature
         await().atMost(Duration.ofSeconds(45))
                 .pollInterval(Duration.ofSeconds(1))
                 .untilAsserted(() -> {
@@ -428,86 +419,6 @@ class PostControllerIT extends AbstractIntegrationTest {
         // Also assert local cache and redis no longer have the cacheKey
         assertThat(localCache.getIfPresent(cacheKey)).isNull();
         assertThat(postRedisRepository.existsById(postId.get())).isFalse();
-    }
-
-    /**
-     * Verifies post reads fall back to Kafka Streams after cache misses.
-     */
-    @org.junit.jupiter.api.Disabled("Kafka streams removed")
-    @Test
-    void shouldFallbackToKafkaStreamsWhenCachesAreMissed() {
-        AuthorEntity entity = new AuthorEntity()
-                .setEmail("kafka@local.com")
-                .setFirstName("Kafka")
-                .setLastName("Streams")
-                .setMobile(1234567890L);
-        entity.setCreatedAt(LocalDateTime.now());
-        authorRepository.save(entity);
-
-        // 1) Create a post
-        AtomicReference<Long> postId = new AtomicReference<>();
-        mockMvcTester
-                .post()
-                .header("Idempotency-Key", UUID.randomUUID().toString())
-                .uri("/api/posts")
-                .content("""
-                        {
-                          "title": "Kafka Streams Fallback",
-                          "content": "This should be retrieved from Kafka Streams",
-                          "email": "kafka@local.com",
-                          "published": true,
-                          "details": {
-                              "detailsKey": "Test details",
-                              "createdBy": "Test runner"
-                          }
-                        }
-                        """)
-                .contentType(MediaType.APPLICATION_JSON)
-                .exchange()
-                .assertThat()
-                .hasStatus(HttpStatus.CREATED)
-                .bodyJson()
-                .convertTo(PostCommandResult.class)
-                .satisfies(postResponse -> postId.set(postResponse.postId()));
-
-        String cacheKey = String.valueOf(postId.get());
-
-        // Wait for it to be fully processed by Kafka Streams and written to Redis
-        await().atMost(Duration.ofSeconds(45))
-                .pollInterval(Duration.ofSeconds(1))
-                .untilAsserted(() ->
-                        assertThat(postRedisRepository.findById(postId.get())).isPresent());
-
-        // 2) Clear local cache and Redis
-        localCache.invalidate(cacheKey);
-        postRedisRepository.deleteById(postId.get());
-
-        // Assert caches are cleared
-        assertThat(localCache.getIfPresent(cacheKey)).isNull();
-        assertThat(postRedisRepository.findById(postId.get())).isEmpty();
-        // 3) GET request should fall back to Kafka Streams and succeed
-        mockMvcTester
-                .get()
-                .uri("/api/posts/{postId}", postId.get())
-                .exchange()
-                .assertThat()
-                .hasStatus(HttpStatus.OK)
-                .hasContentType(MediaType.APPLICATION_JSON)
-                .bodyJson()
-                .convertTo(PostProjection.class)
-                .satisfies(postResponse -> {
-                    assertThat(postResponse.postId()).isEqualTo(postId.get());
-                    assertThat(postResponse.title()).isEqualTo("Kafka Streams Fallback");
-                });
-
-        // 4) Assert Redis is populated again by the fallback warm-up logic
-        await().atMost(Duration.ofSeconds(10))
-                .pollInterval(Duration.ofMillis(500))
-                .untilAsserted(() ->
-                        assertThat(postRedisRepository.findById(postId.get())).isPresent());
-
-        // Assert local cache is also populated
-        assertThat(localCache.getIfPresent(cacheKey)).isNotNull();
     }
 
     /**

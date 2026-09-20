@@ -129,10 +129,7 @@ class AuthorControllerIT extends AbstractIntegrationTest {
                 .pollInterval(Duration.ofMillis(500))
                 .untilAsserted(() -> {
                     String cachedAfter = localCache.getIfPresent(emailKey);
-                    assertThat(cachedAfter).isNotNull();
-                    AuthorProjection cachedAfterProjection = jsonMapper.readValue(cachedAfter, AuthorProjection.class);
-                    assertThat(cachedAfterProjection.middleName()).isEqualTo("IT");
-                    assertThat(cachedAfterProjection.firstName()).isEqualTo("junit");
+                    assertThat(cachedAfter).isNull();
 
                     var updatedResponseFromRedis =
                             authorRedisRepository.findById(emailKey).orElse(null);

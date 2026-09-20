@@ -5,7 +5,7 @@ import static org.awaitility.Awaitility.await;
 
 import com.example.highrps.author.domain.AuthorEntity;
 import com.example.highrps.common.AbstractIntegrationTest;
-import com.example.highrps.infrastructure.kafka.batch.ScheduledBatchProcessor;
+import com.example.highrps.infrastructure.batch.ScheduledBatchProcessor;
 import com.example.highrps.post.domain.PostDetailsEntity;
 import com.example.highrps.post.domain.PostDetailsResponse;
 import com.example.highrps.post.domain.PostEntity;
@@ -449,73 +449,5 @@ class PostCommentControllerIT extends AbstractIntegrationTest {
                 .exchange()
                 .assertThat()
                 .hasStatus(HttpStatus.NOT_FOUND);
-    }
-
-    /**
-     * Verifies comment reads fall back to Kafka Streams after cache misses.
-     */
-    @org.junit.jupiter.api.Disabled("Kafka streams removed")
-    @Test
-    void shouldFallbackToKafkaStreamsWhenCachesAreMissed() {
-        // 1) Create a comment
-        Long[] commentIdHolder = new Long[1];
-        mockMvcTester
-                .post()
-                .header("Idempotency-Key", UUID.randomUUID().toString())
-                .uri("/api/posts/{postId}/comments", postId)
-                .content("""
-                        {
-                          "title": "Fallback Streams",
-                          "content": "Streams fallback content",
-                          "published": true
-                        }
-                        """)
-                .contentType(MediaType.APPLICATION_JSON)
-                .exchange()
-                .assertThat()
-                .hasStatus(HttpStatus.CREATED)
-                .bodyJson()
-                .convertTo(PostCommentCommandResult.class)
-                .satisfies(response -> commentIdHolder[0] = response.id());
-
-        Long commentId = commentIdHolder[0];
-        String cacheKey =
-                com.example.highrps.infrastructure.cache.CacheKeyGenerator.generatePostCommentKey(postId, commentId);
-
-        // The command path updates Redis asynchronously; wait until that write is visible before testing fallback.
-        await().atMost(Duration.ofSeconds(10))
-                .pollInterval(Duration.ofMillis(100))
-                .untilAsserted(() -> assertThat(postCommentRedisRepository.findById(String.valueOf(commentId)))
-                        .isPresent());
-
-        // 2) Clear local cache and Redis
-        localCache.invalidate(cacheKey);
-        postCommentRedisRepository.deleteById(String.valueOf(commentId));
-
-        assertThat(localCache.getIfPresent(cacheKey)).isNull();
-        assertThat(postCommentRedisRepository.findById(String.valueOf(commentId)))
-                .isEmpty();
-
-        // 3) GET request should fall back to Kafka Streams and succeed
-        mockMvcTester
-                .get()
-                .uri("/api/posts/{postId}/comments/{postCommentId}", postId, commentId)
-                .exchange()
-                .assertThat()
-                .hasStatus(HttpStatus.OK)
-                .hasContentType(MediaType.APPLICATION_JSON)
-                .bodyJson()
-                .convertTo(PostCommentCommandResult.class)
-                .satisfies(response -> {
-                    assertThat(response.id()).isEqualTo(commentId);
-                    assertThat(response.title()).isEqualTo("Fallback Streams");
-                });
-
-        // 4) Assert Redis is populated again by the fallback warm-up logic
-        assertThat(postCommentRedisRepository.findById(String.valueOf(commentId)))
-                .isPresent();
-
-        // Assert local cache is also populated
-        assertThat(localCache.getIfPresent(cacheKey)).isNotNull();
     }
 }
