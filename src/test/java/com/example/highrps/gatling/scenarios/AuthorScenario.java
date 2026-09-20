@@ -4,6 +4,7 @@ import static io.gatling.javaapi.core.CoreDsl.*;
 import static io.gatling.javaapi.http.HttpDsl.*;
 
 import io.gatling.javaapi.core.ChainBuilder;
+import java.net.URI;
 import java.util.UUID;
 
 public class AuthorScenario {
@@ -27,9 +28,13 @@ public class AuthorScenario {
                                         "{\"firstName\":\"New\", \"lastName\":\"Author\", \"mobile\":\"1234567890\", \"email\":\"#{newEmail}\"}"))
                         .check(status().is(201))
                         .check(header("Location").saveAs("authorLocation")))
+                .exec(session -> {
+                    String location = session.getString("authorLocation");
+                    return session.set("authorPath", URI.create(location).getRawPath());
+                })
                 // functional check: retrieve it
                 .exec(http("Verify Author")
-                        .get("#{authorLocation}")
+                        .get("#{authorPath}")
                         .check(status().is(200))
                         .check(jsonPath("$.email").is(session -> session.getString("newEmail")))
                         .check(jsonPath("$.mobile").is("1234567890")));

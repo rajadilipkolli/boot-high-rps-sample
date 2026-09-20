@@ -13,4 +13,14 @@ class HighRpsSimulationTest {
         assertThat(HighRpsSimulation.injectionSteps(true, 10, 1, 0)).hasSize(8);
         assertThat(HighRpsSimulation.injectionSteps(true, 10, 1, 5)).hasSize(9);
     }
+
+    @Test
+    void omitsUnstablePerOperationLatencyAssertionsFromSmokeProfile() {
+        assertThat(HighRpsSimulation.includePerOperationLatencyAssertions("smoke"))
+                .isFalse();
+        assertThat(HighRpsSimulation.includePerOperationLatencyAssertions("normal"))
+                .isTrue();
+        assertThat(HighRpsSimulation.includePerOperationLatencyAssertions("stress"))
+                .isTrue();
+    }
 }
