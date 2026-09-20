@@ -21,8 +21,7 @@
             "shared",
             "infrastructure",
             "infrastructure::cache",
-            "infrastructure::redis",
-            "infrastructure::kafka"
+            "infrastructure::redis"
         })
 package com.example.highrps.postcomment;
 
