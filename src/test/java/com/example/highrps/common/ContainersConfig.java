@@ -1,18 +1,12 @@
 package com.example.highrps.common;
 
 import com.redis.testcontainers.RedisContainer;
-import eu.rekawek.toxiproxy.Proxy;
-import eu.rekawek.toxiproxy.ToxiproxyClient;
 import java.time.Duration;
-import java.util.UUID;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
 import org.springframework.test.context.DynamicPropertyRegistrar;
-import org.testcontainers.containers.Network;
 import org.testcontainers.grafana.LgtmStackContainer;
-import org.testcontainers.kafka.KafkaContainer;
-import org.testcontainers.toxiproxy.ToxiproxyContainer;
 import org.testcontainers.utility.DockerImageName;
 
 @TestConfiguration(proxyBeanMethods = false)

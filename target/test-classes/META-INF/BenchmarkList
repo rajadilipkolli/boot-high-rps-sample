@@ -1,0 +1,1 @@
+JMH S 36 com.example.highrps.ApiLoadBenchmark S 62 com.example.highrps.jmh_generated.ApiLoadBenchmark_mix_jmhTest S 3 mix S 10 Throughput E A 2 2 50 3 450 L 2 19 createPostBenchmark 17 readPostBenchmark I 1 1 T 3 5 s E I 1 2 T 4 10 s E I 1 0 E E E E E E U 7 SECONDS E E 

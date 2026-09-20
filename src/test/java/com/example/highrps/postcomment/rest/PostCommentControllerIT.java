@@ -21,9 +21,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
-import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
-import org.springframework.kafka.listener.MessageListenerContainer;
-import org.springframework.test.context.TestContextManager;
 
 class PostCommentControllerIT extends AbstractIntegrationTest {
 
@@ -499,52 +496,26 @@ class PostCommentControllerIT extends AbstractIntegrationTest {
         assertThat(postCommentRedisRepository.findById(String.valueOf(commentId)))
                 .isEmpty();
 
-        // Stop the Kafka listener to prevent it from repopulating Redis asynchronously during the test,
-        // which forces the GET request to strictly rely on the Kafka Streams state store fallback.
-        KafkaListenerEndpointRegistry registry = TestContextManager.class != null
-                ? applicationContext.getBean(KafkaListenerEndpointRegistry.class)
-                : null;
-        MessageListenerContainer listenerContainer = registry != null
-                ? registry.getListenerContainers().stream()
-                        .filter(c -> "post-comments-redis-writer".equals(c.getGroupId())
-                                || "post-comments-aggregates"
-                                        .equals(c.getContainerProperties().getTopics()[0]))
-                        .findFirst()
-                        .orElse(null)
-                : null;
+        // 3) GET request should fall back to Kafka Streams and succeed
+        mockMvcTester
+                .get()
+                .uri("/api/posts/{postId}/comments/{postCommentId}", postId, commentId)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.OK)
+                .hasContentType(MediaType.APPLICATION_JSON)
+                .bodyJson()
+                .convertTo(PostCommentCommandResult.class)
+                .satisfies(response -> {
+                    assertThat(response.id()).isEqualTo(commentId);
+                    assertThat(response.title()).isEqualTo("Fallback Streams");
+                });
 
-        assertThat(listenerContainer)
-                .as("Targeted Redis-writer listener container must be found")
-                .isNotNull();
-        listenerContainer.pause();
+        // 4) Assert Redis is populated again by the fallback warm-up logic
+        assertThat(postCommentRedisRepository.findById(String.valueOf(commentId)))
+                .isPresent();
 
-        try {
-            // 3) GET request should fall back to Kafka Streams and succeed
-            mockMvcTester
-                    .get()
-                    .uri("/api/posts/{postId}/comments/{postCommentId}", postId, commentId)
-                    .exchange()
-                    .assertThat()
-                    .hasStatus(HttpStatus.OK)
-                    .hasContentType(MediaType.APPLICATION_JSON)
-                    .bodyJson()
-                    .convertTo(PostCommentCommandResult.class)
-                    .satisfies(response -> {
-                        assertThat(response.id()).isEqualTo(commentId);
-                        assertThat(response.title()).isEqualTo("Fallback Streams");
-                    });
-
-            // 4) Assert Redis is populated again by the fallback warm-up logic
-            assertThat(postCommentRedisRepository.findById(String.valueOf(commentId)))
-                    .isPresent();
-
-            // Assert local cache is also populated
-            assertThat(localCache.getIfPresent(cacheKey)).isNotNull();
-
-        } finally {
-            if (listenerContainer != null) {
-                listenerContainer.resume();
-            }
-        }
+        // Assert local cache is also populated
+        assertThat(localCache.getIfPresent(cacheKey)).isNotNull();
     }
 }

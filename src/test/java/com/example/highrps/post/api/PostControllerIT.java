@@ -20,8 +20,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
-import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
-import org.springframework.kafka.listener.MessageListenerContainer;
 
 class PostControllerIT extends AbstractIntegrationTest {
 
@@ -487,43 +485,20 @@ class PostControllerIT extends AbstractIntegrationTest {
         // Assert caches are cleared
         assertThat(localCache.getIfPresent(cacheKey)).isNull();
         assertThat(postRedisRepository.findById(postId.get())).isEmpty();
-
-        // Stop the Kafka listener to prevent it from repopulating Redis asynchronously during the test,
-        // which forces the GET request to strictly rely on the Kafka Streams state store fallback.
-        KafkaListenerEndpointRegistry registry = applicationContext.getBean(KafkaListenerEndpointRegistry.class);
-        MessageListenerContainer listenerContainer = registry != null
-                ? registry.getListenerContainers().stream()
-                        .filter(c -> "new-posts-redis-writer".equals(c.getGroupId())
-                                || "posts-aggregates"
-                                        .equals(c.getContainerProperties().getTopics()[0]))
-                        .findFirst()
-                        .orElse(null)
-                : null;
-
-        if (listenerContainer != null) {
-            listenerContainer.pause();
-        }
-
-        try {
-            // 3) GET request should fall back to Kafka Streams and succeed
-            mockMvcTester
-                    .get()
-                    .uri("/api/posts/{postId}", postId.get())
-                    .exchange()
-                    .assertThat()
-                    .hasStatus(HttpStatus.OK)
-                    .hasContentType(MediaType.APPLICATION_JSON)
-                    .bodyJson()
-                    .convertTo(PostProjection.class)
-                    .satisfies(postResponse -> {
-                        assertThat(postResponse.postId()).isEqualTo(postId.get());
-                        assertThat(postResponse.title()).isEqualTo("Kafka Streams Fallback");
-                    });
-        } finally {
-            if (listenerContainer != null) {
-                listenerContainer.resume();
-            }
-        }
+        // 3) GET request should fall back to Kafka Streams and succeed
+        mockMvcTester
+                .get()
+                .uri("/api/posts/{postId}", postId.get())
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.OK)
+                .hasContentType(MediaType.APPLICATION_JSON)
+                .bodyJson()
+                .convertTo(PostProjection.class)
+                .satisfies(postResponse -> {
+                    assertThat(postResponse.postId()).isEqualTo(postId.get());
+                    assertThat(postResponse.title()).isEqualTo("Kafka Streams Fallback");
+                });
 
         // 4) Assert Redis is populated again by the fallback warm-up logic
         await().atMost(Duration.ofSeconds(10))

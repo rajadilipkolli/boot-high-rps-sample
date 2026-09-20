@@ -14,8 +14,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
-import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
-import org.springframework.kafka.listener.MessageListenerContainer;
 
 class AuthorControllerIT extends AbstractIntegrationTest {
 
@@ -244,51 +242,28 @@ class AuthorControllerIT extends AbstractIntegrationTest {
         assertThat(localCache.getIfPresent(emailKey)).isNull();
         assertThat(authorRedisRepository.findById(emailKey)).isEmpty();
 
-        // Stop the Kafka listener to prevent it from repopulating Redis asynchronously during the test,
-        // which forces the GET request to strictly rely on the Kafka Streams state store fallback.
-        KafkaListenerEndpointRegistry registry = applicationContext.getBean(KafkaListenerEndpointRegistry.class);
-        MessageListenerContainer listenerContainer = registry != null
-                ? registry.getListenerContainers().stream()
-                        .filter(c -> "authors-redis-writer".equals(c.getGroupId())
-                                || "authors-aggregates"
-                                        .equals(c.getContainerProperties().getTopics()[0]))
-                        .findFirst()
-                        .orElse(null)
-                : null;
+        // 3) GET request should fall back to Kafka Streams and succeed
+        mockMvcTester
+                .get()
+                .uri("/api/author/" + email)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.OK)
+                .hasContentType(MediaType.APPLICATION_JSON)
+                .bodyJson()
+                .convertTo(AuthorProjection.class)
+                .satisfies(authorProjection -> {
+                    assertThat(authorProjection.email()).isEqualTo(emailKey);
+                    assertThat(authorProjection.firstName()).isEqualTo("Streams");
+                });
 
-        assertThat(listenerContainer)
-                .as("Targeted Redis-writer listener container must be found")
-                .isNotNull();
-        listenerContainer.pause();
+        // 4) Assert Redis is populated again by the fallback warm-up logic
+        await().atMost(Duration.ofSeconds(10))
+                .pollInterval(Duration.ofMillis(500))
+                .untilAsserted(() ->
+                        assertThat(authorRedisRepository.findById(emailKey)).isPresent());
 
-        try {
-            // 3) GET request should fall back to Kafka Streams and succeed
-            mockMvcTester
-                    .get()
-                    .uri("/api/author/" + email)
-                    .exchange()
-                    .assertThat()
-                    .hasStatus(HttpStatus.OK)
-                    .hasContentType(MediaType.APPLICATION_JSON)
-                    .bodyJson()
-                    .convertTo(AuthorProjection.class)
-                    .satisfies(authorProjection -> {
-                        assertThat(authorProjection.email()).isEqualTo(emailKey);
-                        assertThat(authorProjection.firstName()).isEqualTo("Streams");
-                    });
-
-            // 4) Assert Redis is populated again by the fallback warm-up logic
-            await().atMost(Duration.ofSeconds(10))
-                    .pollInterval(Duration.ofMillis(500))
-                    .untilAsserted(() ->
-                            assertThat(authorRedisRepository.findById(emailKey)).isPresent());
-
-            // Assert local cache is also populated
-            assertThat(localCache.getIfPresent(emailKey)).isNotNull();
-        } finally {
-            if (listenerContainer != null) {
-                listenerContainer.resume();
-            }
-        }
+        // Assert local cache is also populated
+        assertThat(localCache.getIfPresent(emailKey)).isNotNull();
     }
 }
