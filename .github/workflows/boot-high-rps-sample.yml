@@ -28,7 +28,7 @@ jobs:
         run: ./mvnw clean verify
 
   gatling-smoke:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v7

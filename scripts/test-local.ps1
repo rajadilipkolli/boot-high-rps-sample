@@ -41,7 +41,11 @@ docker compose -p boot-high-rps-sample -f docker/docker-compose.yml up -d
 docker compose -p boot-high-rps-sample -f docker/docker-compose-monitoring.yml up -d
 
 Write-Host "Building app..."
-cmd /c "mvnw.cmd clean package -DskipTests"
+if ($IsWindows) {
+    cmd /c "mvnw.cmd clean package -DskipTests"
+} else {
+    ./mvnw clean package -DskipTests
+}
 docker compose -p boot-high-rps-sample -f docker/docker-compose.yml build app
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Build failed!"
@@ -49,7 +53,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "Starting app behind load balancer..."
-docker-compose -p boot-high-rps-sample -f docker/docker-compose.yml up -d --scale app=2
+docker compose -p boot-high-rps-sample -f docker/docker-compose.yml up -d --scale app=2
 docker restart boot-high-rps-sample-nginx-1
 
 Write-Host "Waiting for app to start..."
@@ -83,7 +87,11 @@ if ((Test-Path -LiteralPath $CompletionMarker -PathType Leaf) -and $RequiredFeed
     }
 
     Write-Host "App is UP! Running Data Generator..."
-    cmd /c "mvnw.cmd exec:java -Dexec.mainClass=com.example.highrps.gatling.setup.DataGenerator -Dexec.classpathScope=test -DdataDir=$DataDirectory -Dprofile=$Profile"
+    if ($IsWindows) {
+        cmd /c "mvnw.cmd exec:java -Dexec.mainClass=com.example.highrps.gatling.setup.DataGenerator -Dexec.classpathScope=test -DdataDir=$DataDirectory -Dprofile=$Profile"
+    } else {
+        ./mvnw exec:java -Dexec.mainClass=com.example.highrps.gatling.setup.DataGenerator -Dexec.classpathScope=test "-DdataDir=$DataDirectory" "-Dprofile=$Profile"
+    }
 
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Data Generator failed!"
@@ -99,7 +107,11 @@ if ((Test-Path -LiteralPath $CompletionMarker -PathType Leaf) -and $RequiredFeed
 }
 
 Write-Host "Running Gatling with Profile: $Profile..."
-cmd /c "mvnw.cmd gatling:test -Dprofile=$Profile -DdurationMinutes=$DurationMinutes -DwarmupMinutes=$WarmupMinutes"
+if ($IsWindows) {
+    cmd /c "mvnw.cmd gatling:test -Dprofile=$Profile -DdurationMinutes=$DurationMinutes -DwarmupMinutes=$WarmupMinutes"
+} else {
+    ./mvnw gatling:test "-Dprofile=$Profile" "-DdurationMinutes=$DurationMinutes" "-DwarmupMinutes=$WarmupMinutes"
+}
 $GatlingExitCode = $LASTEXITCODE
 
 exit $GatlingExitCode
