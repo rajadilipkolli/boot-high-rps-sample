@@ -82,21 +82,26 @@ jobs:
           printf 'POST_DELETE_WEIGHT=%s\n' "$POST_DELETE_WEIGHT" >> "$GITHUB_ENV"
           printf 'COMMENT_UPDATE_WEIGHT=%s\n' "$COMMENT_UPDATE_WEIGHT" >> "$GITHUB_ENV"
           printf 'COMMENT_DELETE_WEIGHT=%s\n' "$COMMENT_DELETE_WEIGHT" >> "$GITHUB_ENV"
-          printf 'CURRENT_HEAD=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
 
       - name: Run Gatling Tests against HEAD
         run: |
           # We are already on the triggered commit (HEAD)
+          set +e
           pwsh ./scripts/test-local.ps1 -Profile $PROFILE -DurationMinutes $DURATION -WarmupMinutes 0
+          GATLING_EXIT_CODE=$?
+          set -e
           
           # Save Stats
           if [[ -d target/gatling ]]; then
-            STATS_FILE=$(find target/gatling -name "stats.json" -print -quit)
+            STATS_FILE=$(find target/gatling -name "stats.json" -o -name "global_stats.json" | head -n 1)
             if [[ -n "$STATS_FILE" && -f "$STATS_FILE" ]]; then
               cp "$STATS_FILE" stats.json
             fi
             mv target/gatling gatling-report
           fi
+          
+          exit $GATLING_EXIT_CODE
 
       - name: Collect Diagnostics
         if: ${{ always() }}
@@ -150,4 +155,3 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-

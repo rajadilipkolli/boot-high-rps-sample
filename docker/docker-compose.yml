@@ -67,6 +67,9 @@ services:
     environment:
       - SPRING_PROFILES_ACTIVE=production
       - TSID_NODE_COUNT=10
+      - MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT=http://host.docker.internal:4318/v1/traces
+      - MANAGEMENT_OTLP_METRICS_EXPORT_URL=http://host.docker.internal:4318/v1/metrics
+    extra_hosts: [ 'host.docker.internal:host-gateway' ]
     depends_on:
       - postgresqldb
     networks:

@@ -39,12 +39,14 @@ def main():
     run_cmd("docker logs sentinel-3", f"{out_dir}/sentinel-3.log")
     run_cmd("docker logs node-exporter", f"{out_dir}/node-exporter.log")
     run_cmd("docker logs postgres-exporter", f"{out_dir}/postgres-exporter.log")
+    run_cmd("docker logs grafana-lgtm", f"{out_dir}/grafana-lgtm.log")
 
     # Metrics
     fetch_url("http://localhost:8080/actuator/metrics", f"{out_dir}/actuator-metrics-list.json")
     fetch_url("http://localhost:8080/actuator/prometheus", f"{out_dir}/app-prometheus.txt")
     fetch_url("http://localhost:9187/metrics", f"{out_dir}/postgres-exporter-metrics.txt")
     fetch_url("http://localhost:9100/metrics", f"{out_dir}/node-exporter-metrics.txt")
+    fetch_url("http://localhost:9090/api/v1/targets", f"{out_dir}/prometheus-targets.json")
 
     print("Diagnostics collected in diagnostics/")
 

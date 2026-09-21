@@ -33,7 +33,7 @@ services:
       - "4318:4318" # OTLP HTTP receiver
       - "9090:9090" # Prometheus metrics endpoint
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus.yml:/otel-lgtm/prometheus/prometheus.yml:ro
     networks:
       - metrics-network
 
