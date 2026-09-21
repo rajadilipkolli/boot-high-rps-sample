@@ -93,10 +93,12 @@ public class HighRpsSimulation extends Simulation {
                 "post_create",
                 "post_update",
                 "post_delete",
+                "Verify Deleted Post",
                 "post_read",
                 "comment_create",
                 "comment_update",
                 "comment_delete",
+                "Verify Deleted Comment",
                 "comment_read",
                 "tag_read");
         for (String operation : operations) {

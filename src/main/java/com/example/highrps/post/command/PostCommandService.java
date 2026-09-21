@@ -13,7 +13,9 @@ import com.example.highrps.shared.AggregateOperationQueue;
 import com.example.highrps.shared.ResourceConflictException;
 import com.example.highrps.shared.config.AppProperties;
 import com.example.highrps.shared.redis.DeletionMarkerHandler;
+import com.example.highrps.shared.redis.RedisViewCleanupService;
 import com.github.benmanes.caffeine.cache.Cache;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -39,7 +41,8 @@ public class PostCommandService extends AbstractCommandService {
     private final DeletionMarkerHandler deletionMarkerHandler;
     private final PostQueryService postQueryService;
     private final RedisTemplate<String, String> redisTemplate;
-    private final AggregateOperationQueue redisWriteQueue = new AggregateOperationQueue();
+    private final AggregateOperationQueue redisWriteQueue;
+    private final RedisViewCleanupService redisViewCleanupService;
 
     /**
      * Creates a post command service with its event, cache, and persistence collaborators.
@@ -49,6 +52,8 @@ public class PostCommandService extends AbstractCommandService {
      * @param deletionMarkerHandler handler for deleted aggregates
      * @param postQueryService post read service
      * @param appProperties application configuration
+     * @param meterRegistry meter registry
+     * @param redisViewCleanupService redis view cleanup service
      */
     public PostCommandService(
             RedisTemplate<String, String> redisTemplate,
@@ -57,13 +62,17 @@ public class PostCommandService extends AbstractCommandService {
             PostRedisRepository postRedisRepository,
             DeletionMarkerHandler deletionMarkerHandler,
             PostQueryService postQueryService,
-            AppProperties appProperties) {
+            AppProperties appProperties,
+            MeterRegistry meterRegistry,
+            RedisViewCleanupService redisViewCleanupService) {
         super(redisTemplate, jsonMapper, appProperties);
         this.localCache = localCache;
         this.postRedisRepository = postRedisRepository;
         this.deletionMarkerHandler = deletionMarkerHandler;
         this.postQueryService = postQueryService;
         this.redisTemplate = redisTemplate;
+        this.redisViewCleanupService = redisViewCleanupService;
+        this.redisWriteQueue = new AggregateOperationQueue(meterRegistry);
     }
 
     /**
@@ -252,10 +261,14 @@ public class PostCommandService extends AbstractCommandService {
                     redisWriteQueue
                             .enqueue(cacheKey, () -> {
                                 deletionMarkerHandler.markDeleted(DeletionMarkerHandler.POST, String.valueOf(postId));
-                                postRedisRepository.deleteById(postId);
                                 return CompletableFuture.completedFuture(null);
                             })
                             .join();
+
+                    redisWriteQueue.enqueue(
+                            cacheKey,
+                            () -> redisViewCleanupService.cleanupAsync(
+                                    "post", () -> postRedisRepository.deleteById(postId)));
                 },
                 "delete post",
                 "Post");

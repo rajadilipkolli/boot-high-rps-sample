@@ -1,5 +1,7 @@
 package com.example.highrps.shared.redis;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import java.time.Duration;
 import java.util.Objects;
 import org.slf4j.Logger;
@@ -23,9 +25,11 @@ public class DeletionMarkerHandler {
     public static final String POST_COMMENT = "post-comment";
 
     private final RedisTemplate<String, String> redis;
+    private final MeterRegistry meterRegistry;
 
-    public DeletionMarkerHandler(RedisTemplate<String, String> redis) {
+    public DeletionMarkerHandler(RedisTemplate<String, String> redis, MeterRegistry meterRegistry) {
         this.redis = redis;
+        this.meterRegistry = meterRegistry;
     }
 
     /**
@@ -34,8 +38,14 @@ public class DeletionMarkerHandler {
      */
     public void markDeleted(String entityType, String key) {
         String markerKey = getMarkerKey(entityType, key);
+        long start = System.nanoTime();
         try {
             redis.opsForValue().set(markerKey, "1", DEFAULT_TTL);
+            if (meterRegistry != null) {
+                Timer.builder("delete_marker_write")
+                        .register(meterRegistry)
+                        .record(Duration.ofNanos(System.nanoTime() - start));
+            }
             log.debug("Marked entity as deleted in Redis: {}", markerKey);
         } catch (Exception e) {
             log.warn("Failed to mark entity as deleted in Redis: {}", markerKey, e);

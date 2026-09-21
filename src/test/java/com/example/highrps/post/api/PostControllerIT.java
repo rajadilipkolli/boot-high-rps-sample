@@ -11,6 +11,7 @@ import com.example.highrps.post.domain.PostDetailsResponse;
 import com.example.highrps.post.domain.PostRedis;
 import com.example.highrps.post.query.PostProjection;
 import com.example.highrps.shared.IdGenerator;
+import com.example.highrps.shared.redis.DeletionMarkerHandler;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -216,6 +217,9 @@ class PostControllerIT extends AbstractIntegrationTest {
                 .assertThat()
                 .hasStatus(HttpStatus.NO_CONTENT);
 
+        assertThat(redisTemplate.hasKey("deleted:" + DeletionMarkerHandler.POST + ":" + postId.get()))
+                .isTrue();
+
         // 4) Subsequent GET should return 404 immediately due to synchronous cache invalidation and tombstone marker
         mockMvcTester
                 .get()
@@ -394,6 +398,9 @@ class PostControllerIT extends AbstractIntegrationTest {
                 .assertThat()
                 .hasStatus(HttpStatus.NO_CONTENT);
 
+        assertThat(redisTemplate.hasKey("deleted:" + DeletionMarkerHandler.POST + ":" + postId.get()))
+                .isTrue();
+
         // 4) Subsequent GET should return 404 immediately due to synchronous cache invalidation and tombstone marker
         mockMvcTester
                 .get()
@@ -475,5 +482,80 @@ class PostControllerIT extends AbstractIntegrationTest {
                 .assertThat()
                 .hasStatus(HttpStatus.CONFLICT)
                 .hasContentType(MediaType.APPLICATION_PROBLEM_JSON);
+    }
+
+    @Test
+    @DisplayName("Should prevent create or update after delete due to deletion marker")
+    void shouldPreventCreateOrUpdateAfterDelete() {
+        Long postId = IdGenerator.generateLong();
+
+        // 1. Create a post
+        mockMvcTester
+                .post()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .uri("/api/posts")
+                .content("""
+                        {
+                            "postId": %d,
+                            "title": "Post Before Delete",
+                            "content": "Initial content",
+                            "email": "author@example.com",
+                            "published": true,
+                            "details": {
+                                "detailsKey": "key1",
+                                "createdBy": "user1"
+                            }
+                        }
+                        """.formatted(postId))
+                .contentType(MediaType.APPLICATION_JSON)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.CREATED);
+
+        // Ensure it is in Redis
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            assertThat(postRedisRepository.existsById(postId)).isTrue();
+        });
+
+        // 2. Delete it
+        mockMvcTester
+                .delete()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .uri("/api/posts/{postId}", postId)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.NO_CONTENT);
+
+        assertThat(redisTemplate.hasKey("deleted:" + DeletionMarkerHandler.POST + ":" + postId))
+                .isTrue();
+
+        // 3. Update the post (simulating an out-of-order Kafka message or a concurrent update)
+        mockMvcTester
+                .put()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .uri("/api/posts/{postId}", postId)
+                .content("""
+                        {
+                            "postId": %d,
+                            "title": "Post After Delete",
+                            "content": "Updated content",
+                            "email": "author@example.com",
+                            "published": true,
+                            "details": {
+                                "detailsKey": "key1",
+                                "createdBy": "user1"
+                            }
+                        }
+                        """.formatted(postId))
+                .contentType(MediaType.APPLICATION_JSON)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.OK);
+
+        // 4. Process the batch (which would include the update)
+        scheduledBatchProcessors.forEach(ScheduledBatchProcessor::processBatch);
+
+        // 5. Assert the entity remains absent from Redis
+        assertThat(postRedisRepository.existsById(postId)).isFalse();
     }
 }

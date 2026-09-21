@@ -12,6 +12,7 @@ import com.example.highrps.post.domain.PostEntity;
 import com.example.highrps.post.domain.PostRedis;
 import com.example.highrps.postcomment.command.PostCommentCommandResult;
 import com.example.highrps.shared.IdGenerator;
+import com.example.highrps.shared.redis.DeletionMarkerHandler;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -341,6 +342,11 @@ class PostCommentControllerIT extends AbstractIntegrationTest {
                 .assertThat()
                 .hasStatus(HttpStatus.NO_CONTENT);
 
+        assertThat(redisTemplate.hasKey("deleted:" + DeletionMarkerHandler.POST_COMMENT + ":"
+                        + com.example.highrps.infrastructure.cache.CacheKeyGenerator.generatePostCommentKey(
+                                postId, commentId)))
+                .isTrue();
+
         // Verify it's deleted
         mockMvcTester
                 .get()
@@ -355,6 +361,8 @@ class PostCommentControllerIT extends AbstractIntegrationTest {
                     scheduledBatchProcessors.forEach(ScheduledBatchProcessor::processBatch);
                     assertThat(postCommentRepository.findByCommentRefIdAndPostRefId(commentId, postId))
                             .isEmpty();
+                    assertThat(postCommentRedisRepository.existsById(String.valueOf(commentId)))
+                            .isFalse();
                 });
     }
 

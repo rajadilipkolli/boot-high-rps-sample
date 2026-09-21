@@ -12,6 +12,8 @@ import com.example.highrps.post.domain.requests.NewPostRequest;
 import com.example.highrps.post.mapper.NewPostRequestToPostEntityMapper;
 import com.example.highrps.shared.redis.DeletionMarkerHandler;
 import jakarta.persistence.EntityManager;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -26,6 +28,8 @@ import org.hibernate.KeyType;
 import org.hibernate.Session;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.jdbc.core.BatchPreparedStatementSetter;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.json.JsonMapper;
@@ -42,6 +46,7 @@ public class PostBatchProcessor implements EntityBatchProcessor {
     private final AuthorRepository authorRepository;
     private final DeletionMarkerHandler deletionMarkerHandler;
     private final EntityManager entityManager;
+    private final JdbcTemplate jdbcTemplate;
 
     public PostBatchProcessor(
             NewPostRequestToPostEntityMapper mapper,
@@ -50,7 +55,8 @@ public class PostBatchProcessor implements EntityBatchProcessor {
             JsonMapper jsonMapper,
             AuthorRepository authorRepository,
             DeletionMarkerHandler deletionMarkerHandler,
-            EntityManager entityManager) {
+            EntityManager entityManager,
+            JdbcTemplate jdbcTemplate) {
         this.mapper = mapper;
         this.postRepository = postRepository;
         this.tagRepository = tagRepository;
@@ -58,6 +64,7 @@ public class PostBatchProcessor implements EntityBatchProcessor {
         this.authorRepository = authorRepository;
         this.deletionMarkerHandler = deletionMarkerHandler;
         this.entityManager = entityManager;
+        this.jdbcTemplate = jdbcTemplate;
     }
 
     @Override
@@ -152,9 +159,27 @@ public class PostBatchProcessor implements EntityBatchProcessor {
                     .toList();
 
             if (!newTags.isEmpty()) {
-                tagRepository
-                        .saveAll(newTags)
-                        .forEach(t -> tagMap.put(t.getTagName().toLowerCase(Locale.ROOT), t));
+                String sql = "INSERT INTO tags (id, tag_name, tag_description, version, created_at) "
+                        + "VALUES (nextval('tags_seq'), ?, ?, 0, CURRENT_TIMESTAMP) "
+                        + "ON CONFLICT (lower(tag_name)) DO NOTHING";
+
+                jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
+                    @Override
+                    public void setValues(PreparedStatement ps, int i) throws SQLException {
+                        TagEntity t = newTags.get(i);
+                        ps.setString(1, t.getTagName());
+                        ps.setString(2, t.getTagDescription());
+                    }
+
+                    @Override
+                    public int getBatchSize() {
+                        return newTags.size();
+                    }
+                });
+
+                // Refetch to get IDs for all tags, including newly natively inserted ones
+                List<TagEntity> refetchedTags = tagRepository.findByTagNameInAllIgnoreCase(tagNames);
+                refetchedTags.forEach(t -> tagMap.put(t.getTagName().toLowerCase(Locale.ROOT), t));
             }
         }
 
