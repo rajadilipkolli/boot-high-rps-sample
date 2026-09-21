@@ -17,7 +17,7 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.json.JsonMapper;
 
 @Component
@@ -25,20 +25,22 @@ public class PostCommentBatchProcessor implements EntityBatchProcessor {
 
     private static final Logger log = LoggerFactory.getLogger(PostCommentBatchProcessor.class);
     private final PostCommentRepository postCommentRepository;
-
     private final PostRepository postRepository;
     private final JsonMapper jsonMapper;
     private final DeletionMarkerHandler deletionMarkerHandler;
+    private final TransactionTemplate transactionTemplate;
 
     public PostCommentBatchProcessor(
             PostCommentRepository postCommentRepository,
             PostRepository postRepository,
             JsonMapper jsonMapper,
-            DeletionMarkerHandler deletionMarkerHandler) {
+            DeletionMarkerHandler deletionMarkerHandler,
+            TransactionTemplate transactionTemplate) {
         this.postCommentRepository = postCommentRepository;
         this.postRepository = postRepository;
         this.jsonMapper = jsonMapper;
         this.deletionMarkerHandler = deletionMarkerHandler;
+        this.transactionTemplate = transactionTemplate;
     }
 
     @Override
@@ -47,9 +49,10 @@ public class PostCommentBatchProcessor implements EntityBatchProcessor {
     }
 
     @Override
-    @Transactional
     public void processUpserts(List<String> payloads) {
-        // Step 1: Parse payloads and extract IDs
+        // ── Phase 1 (no transaction): parse payloads + tombstone filter ──────────
+        // Redis calls and JSON parsing happen outside any DB transaction so we don't
+        // hold a connection while doing non-DB work.
         List<ParsedComment> parsedComments = payloads.stream()
                 .map(payload -> {
                     String cacheKey = extractKey(payload);
@@ -70,8 +73,7 @@ public class PostCommentBatchProcessor implements EntityBatchProcessor {
                 })
                 .filter(Objects::nonNull)
                 .filter(p -> p.commentId() != null && p.postId() != null)
-                .collect(
-                        Collectors.toMap(ParsedComment::commentId, java.util.function.Function.identity(), (a, b) -> b))
+                .collect(Collectors.toMap(ParsedComment::commentId, Function.identity(), (a, b) -> b))
                 .values()
                 .stream()
                 .toList();
@@ -80,76 +82,80 @@ public class PostCommentBatchProcessor implements EntityBatchProcessor {
             return;
         }
 
-        // Step 2: Extract all comment IDs and fetch existing comments from DB
-        List<Long> commentIds =
-                parsedComments.stream().map(ParsedComment::commentId).collect(Collectors.toList());
+        // ── Phase 2 (transaction): DB reads + saveAll ────────────────────────────
+        // Transaction is opened here — only wraps actual DB I/O.
+        transactionTemplate.executeWithoutResult(status -> {
+            // Step 2a: Fetch existing comments
+            List<Long> commentIds =
+                    parsedComments.stream().map(ParsedComment::commentId).collect(Collectors.toList());
 
-        List<PostCommentEntity> existingComments = postCommentRepository.findByCommentRefIdIn(commentIds);
+            List<PostCommentEntity> existingComments = postCommentRepository.findByCommentRefIdIn(commentIds);
 
-        Map<Long, PostCommentEntity> existingById = existingComments.stream()
-                .collect(Collectors.toMap(PostCommentEntity::getCommentRefId, Function.identity(), (e1, e2) -> e1));
+            Map<Long, PostCommentEntity> existingById = existingComments.stream()
+                    .collect(Collectors.toMap(PostCommentEntity::getCommentRefId, Function.identity(), (e1, e2) -> e1));
 
-        // Collect unique postIds for new comments only
-        Set<Long> newPostIds = parsedComments.stream()
-                .filter(p -> !existingById.containsKey(p.commentId()))
-                .map(ParsedComment::postId)
-                .collect(Collectors.toSet());
-        Map<Long, PostEntity> postsById = postRepository.findByPostRefIdIn(new ArrayList<>(newPostIds)).stream()
-                .collect(Collectors.toMap(PostEntity::getPostRefId, Function.identity()));
+            // Step 2b: Fetch parent posts for new comments only
+            Set<Long> newPostIds = parsedComments.stream()
+                    .filter(p -> !existingById.containsKey(p.commentId()))
+                    .map(ParsedComment::postId)
+                    .collect(Collectors.toSet());
+            Map<Long, PostEntity> postsById = postRepository.findByPostRefIdIn(new ArrayList<>(newPostIds)).stream()
+                    .collect(Collectors.toMap(PostEntity::getPostRefId, Function.identity()));
 
-        // Step 3: Process each comment - update existing or create new
-        List<PostCommentEntity> entitiesToSave = parsedComments.stream()
-                .map(parsed -> {
-                    PostCommentEntity entity = existingById.get(parsed.commentId());
-                    if (entity != null) {
-                        // Update existing entity
-                        try {
-                            updateCommentEntity(parsed.result(), entity);
-                            log.debug("Updating existing comment with id: {}", parsed.commentId());
-                        } catch (Exception e) {
-                            log.warn("Failed to update comment entity for id: {}", parsed.commentId(), e);
-                            return null;
-                        }
-                    } else {
-                        // Create new entity
-                        try {
-                            PostEntity postEntity = postsById.get(parsed.postId());
-                            if (postEntity == null) {
-                                log.warn(
-                                        "Post not found for postRefId: {}, skipping commentRef: {}",
-                                        parsed.postId(),
-                                        parsed.commentId());
+            // Step 2c: Assemble entities
+            List<PostCommentEntity> entitiesToSave = parsedComments.stream()
+                    .map(parsed -> {
+                        PostCommentEntity entity = existingById.get(parsed.commentId());
+                        if (entity != null) {
+                            // Update existing entity
+                            try {
+                                updateCommentEntity(parsed.result(), entity);
+                                log.debug("Updating existing comment with id: {}", parsed.commentId());
+                            } catch (Exception e) {
+                                log.warn("Failed to update comment entity for id: {}", parsed.commentId(), e);
                                 return null;
                             }
-                            entity = createCommentEntity(parsed.result(), postEntity);
-                            log.debug("Creating new comment with id: {}", parsed.commentId());
-                        } catch (Exception e) {
-                            log.warn("Failed to create comment entity for id: {}", parsed.commentId(), e);
-                            return null;
+                        } else {
+                            // Create new entity
+                            try {
+                                PostEntity postEntity = postsById.get(parsed.postId());
+                                if (postEntity == null) {
+                                    log.warn(
+                                            "Post not found for postRefId: {}, skipping commentRef: {}",
+                                            parsed.postId(),
+                                            parsed.commentId());
+                                    return null;
+                                }
+                                entity = createCommentEntity(parsed.result(), postEntity);
+                                log.debug("Creating new comment with id: {}", parsed.commentId());
+                            } catch (Exception e) {
+                                log.warn("Failed to create comment entity for id: {}", parsed.commentId(), e);
+                                return null;
+                            }
                         }
-                    }
-                    return entity;
-                })
-                .filter(Objects::nonNull)
-                .collect(Collectors.toList());
+                        return entity;
+                    })
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toList());
 
-        // Step 4: Save all (both new and updated)
-        if (!entitiesToSave.isEmpty()) {
-            try {
-                postCommentRepository.saveAll(entitiesToSave);
-                long updateCount = entitiesToSave.stream()
-                        .filter(e -> existingById.containsKey(e.getCommentRefId()))
-                        .count();
-                log.debug(
-                        "Persisted batch of {} comment entities ({} updates, {} inserts)",
-                        entitiesToSave.size(),
-                        updateCount,
-                        entitiesToSave.size() - updateCount);
-            } catch (Exception e) {
-                log.error("Failed to persist batch of {} comment entities", entitiesToSave.size(), e);
-                throw e;
+            // Step 2d: Save all (both new and updated)
+            if (!entitiesToSave.isEmpty()) {
+                try {
+                    postCommentRepository.saveAll(entitiesToSave);
+                    long updateCount = entitiesToSave.stream()
+                            .filter(e -> existingById.containsKey(e.getCommentRefId()))
+                            .count();
+                    log.debug(
+                            "Persisted batch of {} comment entities ({} updates, {} inserts)",
+                            entitiesToSave.size(),
+                            updateCount,
+                            entitiesToSave.size() - updateCount);
+                } catch (Exception e) {
+                    log.error("Failed to persist batch of {} comment entities", entitiesToSave.size(), e);
+                    throw e;
+                }
             }
-        }
+        });
     }
 
     @Override

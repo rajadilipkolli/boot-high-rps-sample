@@ -58,16 +58,24 @@ public class RedisViewCleanupService {
                                     Thread.sleep(BACKOFF_MS);
                                 } catch (InterruptedException ie) {
                                     Thread.currentThread().interrupt();
-                                    break;
+                                    Counter.builder("redis_view_cleanup_errors")
+                                            .tag("entity", entityLabel)
+                                            .register(meterRegistry)
+                                            .increment();
+                                    throw new RuntimeException(
+                                            "Redis view cleanup interrupted for entity " + entityLabel, ie);
                                 }
                             }
                         }
                     }
+                    // All attempts exhausted — complete the future exceptionally so callers can detect failure
                     log.error("Exhausted retries cleaning up Redis view for entity {}", entityLabel);
                     Counter.builder("redis_view_cleanup_errors")
                             .tag("entity", entityLabel)
                             .register(meterRegistry)
                             .increment();
+                    throw new RuntimeException(
+                            "Redis view cleanup failed after " + MAX_ATTEMPTS + " attempts for entity " + entityLabel);
                 },
                 executor);
     }
