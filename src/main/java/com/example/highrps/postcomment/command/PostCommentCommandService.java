@@ -19,6 +19,7 @@ import com.example.highrps.shared.ResourceConflictException;
 import com.example.highrps.shared.ResourceNotFoundException;
 import com.example.highrps.shared.config.AppProperties;
 import com.example.highrps.shared.redis.DeletionMarkerHandler;
+import com.example.highrps.shared.redis.RedisViewCleanupService;
 import com.github.benmanes.caffeine.cache.Cache;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -49,7 +50,8 @@ public class PostCommentCommandService extends AbstractCommandService {
     private final DeletionMarkerHandler deletionMarkerHandler;
     private final PostCommentRedisRepository postCommentRedisRepository;
     private final RedisTemplate<String, String> redisTemplate;
-    private final AggregateOperationQueue redisWriteQueue = new AggregateOperationQueue();
+    private final AggregateOperationQueue redisWriteQueue;
+    private final RedisViewCleanupService redisViewCleanupService;
 
     /**
      * Creates a comment command service with its event, cache, and persistence collaborators.
@@ -63,6 +65,7 @@ public class PostCommentCommandService extends AbstractCommandService {
      * @param postCommentRedisRepository Redis comment repository
      * @param appProperties application configuration
      * @param redisTemplate Redis operations used for reservations
+     * @param redisViewCleanupService service for retrying cleanup
      */
     public PostCommentCommandService(
             PostQueryService postQueryService,
@@ -74,7 +77,8 @@ public class PostCommentCommandService extends AbstractCommandService {
             MeterRegistry meterRegistry,
             DeletionMarkerHandler deletionMarkerHandler,
             PostCommentRedisRepository postCommentRedisRepository,
-            AppProperties appProperties) {
+            AppProperties appProperties,
+            RedisViewCleanupService redisViewCleanupService) {
         super(redisTemplate, jsonMapper, appProperties);
         this.postQueryService = postQueryService;
         this.postCommentQueryService = postCommentQueryService;
@@ -83,6 +87,8 @@ public class PostCommentCommandService extends AbstractCommandService {
         this.deletionMarkerHandler = deletionMarkerHandler;
         this.postCommentRedisRepository = postCommentRedisRepository;
         this.redisTemplate = redisTemplate;
+        this.redisViewCleanupService = redisViewCleanupService;
+        this.redisWriteQueue = new AggregateOperationQueue(meterRegistry);
         this.eventsPublishedCounter = Counter.builder("post-comments.events.published")
                 .description("Number of post comment events published")
                 .register(meterRegistry);
@@ -214,10 +220,16 @@ public class PostCommentCommandService extends AbstractCommandService {
                     redisWriteQueue
                             .enqueue(cacheKey, () -> {
                                 deletionMarkerHandler.markDeleted(DeletionMarkerHandler.POST_COMMENT, cacheKey);
-                                postCommentRedisRepository.deleteById(String.valueOf(commentId.id()));
                                 return CompletableFuture.completedFuture(null);
                             })
                             .join();
+
+                    // 4. Delegate delete to cleanup service in a non-joined task
+                    redisWriteQueue.enqueue(
+                            cacheKey,
+                            () -> redisViewCleanupService.cleanupAsync(
+                                    "post-comment",
+                                    () -> postCommentRedisRepository.deleteById(String.valueOf(commentId.id()))));
                 },
                 "delete post comment",
                 "PostComment");

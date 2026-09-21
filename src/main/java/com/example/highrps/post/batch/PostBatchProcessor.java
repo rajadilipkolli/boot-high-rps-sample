@@ -12,6 +12,8 @@ import com.example.highrps.post.domain.requests.NewPostRequest;
 import com.example.highrps.post.mapper.NewPostRequestToPostEntityMapper;
 import com.example.highrps.shared.redis.DeletionMarkerHandler;
 import jakarta.persistence.EntityManager;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -26,8 +28,10 @@ import org.hibernate.KeyType;
 import org.hibernate.Session;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.jdbc.core.BatchPreparedStatementSetter;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.json.JsonMapper;
 
 @Component
@@ -42,6 +46,8 @@ public class PostBatchProcessor implements EntityBatchProcessor {
     private final AuthorRepository authorRepository;
     private final DeletionMarkerHandler deletionMarkerHandler;
     private final EntityManager entityManager;
+    private final JdbcTemplate jdbcTemplate;
+    private final TransactionTemplate transactionTemplate;
 
     public PostBatchProcessor(
             NewPostRequestToPostEntityMapper mapper,
@@ -50,7 +56,9 @@ public class PostBatchProcessor implements EntityBatchProcessor {
             JsonMapper jsonMapper,
             AuthorRepository authorRepository,
             DeletionMarkerHandler deletionMarkerHandler,
-            EntityManager entityManager) {
+            EntityManager entityManager,
+            JdbcTemplate jdbcTemplate,
+            TransactionTemplate transactionTemplate) {
         this.mapper = mapper;
         this.postRepository = postRepository;
         this.tagRepository = tagRepository;
@@ -58,6 +66,8 @@ public class PostBatchProcessor implements EntityBatchProcessor {
         this.authorRepository = authorRepository;
         this.deletionMarkerHandler = deletionMarkerHandler;
         this.entityManager = entityManager;
+        this.jdbcTemplate = jdbcTemplate;
+        this.transactionTemplate = transactionTemplate;
     }
 
     @Override
@@ -66,9 +76,10 @@ public class PostBatchProcessor implements EntityBatchProcessor {
     }
 
     @Override
-    @Transactional
     public void processUpserts(List<String> payloads) {
-        // Step 1: Parse payloads and extract postIds, while filtering out any with recent tombstones
+        // ── Phase 1 (no transaction): parse payloads + tombstone filter ──────────
+        // Redis calls and JSON parsing happen outside any DB transaction so we don't
+        // hold a connection while doing non-DB work.
         List<ParsedPost> parsedPosts = payloads.stream()
                 .map(payload -> {
                     String postId = extractKey(payload);
@@ -89,7 +100,7 @@ public class PostBatchProcessor implements EntityBatchProcessor {
                 })
                 .filter(Objects::nonNull)
                 .filter(p -> p.postId() != null)
-                .collect(Collectors.toMap(ParsedPost::postId, java.util.function.Function.identity(), (a, b) -> b))
+                .collect(Collectors.toMap(ParsedPost::postId, Function.identity(), (a, b) -> b))
                 .values()
                 .stream()
                 .toList();
@@ -98,123 +109,146 @@ public class PostBatchProcessor implements EntityBatchProcessor {
             return;
         }
 
-        // Step 2: Extract all postIds and fetch existing posts from DB
-        List<Long> postIds = parsedPosts.stream()
-                .map(parsedPost -> Long.valueOf(parsedPost.postId()))
-                .toList();
-
-        List<PostEntity> existingPosts =
-                entityManager.unwrap(Session.class).findMultiple(PostEntity.class, postIds, KeyType.NATURAL);
-
-        Map<Long, PostEntity> existingByPostId = existingPosts.stream()
-                .filter(Objects::nonNull)
-                .collect(Collectors.toMap(PostEntity::getPostRefId, Function.identity(), (e1, e2) -> e1));
-
-        int updateCount = existingByPostId.size();
-
-        // Step 2.1: Bulk fetch authors
-        List<String> emails = parsedPosts.stream()
-                .map(p -> p.request().email())
-                .filter(Objects::nonNull)
-                .map(s -> s.toLowerCase(Locale.ROOT))
-                .distinct()
-                .toList();
-
-        Map<String, AuthorEntity> authorByEmail = authorRepository.findByEmailInAllIgnoreCase(emails).stream()
-                .collect(
-                        Collectors.toMap(a -> a.getEmail().toLowerCase(Locale.ROOT), Function.identity(), (a, b) -> a));
-
-        // Step 2.2: Bulk fetch and create tags
-        Map<String, TagResponse> tagRequestsByName = parsedPosts.stream()
-                .flatMap(p -> {
-                    var tags = p.request().tags();
-                    return tags != null ? tags.stream() : Stream.<TagResponse>empty();
-                })
-                .filter(t -> t != null && t.tagName() != null && !t.tagName().isBlank())
-                .collect(Collectors.toMap(t -> t.tagName().toLowerCase(Locale.ROOT), Function.identity(), (a, b) -> a));
-
-        List<String> tagNames = new ArrayList<>(tagRequestsByName.keySet());
-
-        Map<String, TagEntity> tagMap = new HashMap<>();
-        if (!tagNames.isEmpty()) {
-            List<TagEntity> existingTags = tagRepository.findByTagNameInAllIgnoreCase(tagNames);
-            existingTags.forEach(t -> tagMap.put(t.getTagName().toLowerCase(Locale.ROOT), t));
-
-            List<TagEntity> newTags = tagNames.stream()
-                    .filter(name -> !tagMap.containsKey(name))
-                    .map(name -> {
-                        TagResponse tr = tagRequestsByName.get(name);
-                        TagEntity tagEntity =
-                                new TagEntity().setTagName(tr.tagName()).setTagDescription(tr.tagDescription());
-                        tagEntity.setCreatedAt(LocalDateTime.now());
-                        return tagEntity;
-                    })
+        // ── Phase 2 (transaction): DB reads → tag upsert → saveAll ───────────────
+        // Transaction is opened here — only wraps actual DB I/O.
+        transactionTemplate.executeWithoutResult(status -> {
+            // Step 2a: Bulk-fetch existing posts
+            List<Long> postIds = parsedPosts.stream()
+                    .map(parsedPost -> Long.valueOf(parsedPost.postId()))
                     .toList();
 
-            if (!newTags.isEmpty()) {
-                tagRepository
-                        .saveAll(newTags)
-                        .forEach(t -> tagMap.put(t.getTagName().toLowerCase(Locale.ROOT), t));
-            }
-        }
+            List<PostEntity> existingPosts =
+                    entityManager.unwrap(Session.class).findMultiple(PostEntity.class, postIds, KeyType.NATURAL);
 
-        // Step 3: Process each post - update existing or create new
-        List<PostEntity> entitiesToSave = parsedPosts.stream()
-                .map(parsed -> {
-                    PostEntity entity = existingByPostId.get(Long.valueOf(parsed.postId()));
-                    if (entity != null) {
-                        // Update existing entity
-                        try {
-                            mapper.updatePostEntity(parsed.request(), entity, tagMap);
-                            log.debug("Updating existing post with postid: {}", parsed.postId());
-                        } catch (Exception e) {
-                            log.error("Failed to update post entity for postId: {}", parsed.postId(), e);
-                            throw new RuntimeException(
-                                    "Failed to update post entity for postId: " + parsed.postId(), e);
-                        }
-                    } else {
-                        // Create new entity
-                        try {
-                            entity = mapper.convert(parsed.request(), tagMap);
-                            String authorEmail = parsed.request().email();
-                            AuthorEntity author = null;
-                            if (authorEmail != null) {
-                                author = authorByEmail.get(authorEmail.toLowerCase(Locale.ROOT));
-                            }
-                            if (author == null) {
-                                log.warn(
-                                        "Author not found for email {}, rejecting post {}",
-                                        authorEmail,
-                                        parsed.postId());
-                                return null; // Reject the corresponding post explicitly
-                            }
-                            entity.setAuthorEntity(author);
-                            log.debug("Creating new post with postRefId: {}", parsed.postId());
-                        } catch (Exception e) {
-                            log.error("Failed to create post entity for postId: {}", parsed.postId(), e);
-                            throw new RuntimeException(
-                                    "Failed to create post entity for postId: " + parsed.postId(), e);
-                        }
-                    }
-                    return entity;
-                })
-                .filter(Objects::nonNull)
-                .collect(Collectors.toList());
+            Map<Long, PostEntity> existingByPostId = existingPosts.stream()
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toMap(PostEntity::getPostRefId, Function.identity(), (e1, e2) -> e1));
 
-        // Step 4: Save all (both new and updated)
-        if (!entitiesToSave.isEmpty()) {
-            try {
-                postRepository.saveAll(entitiesToSave);
-                log.debug(
-                        "Persisted batch of {} post entities ({} updates, {} inserts)",
-                        entitiesToSave.size(),
-                        updateCount,
-                        entitiesToSave.size() - updateCount);
-            } catch (Exception e) {
-                log.error("Failed to persist batch of {} post entities", entitiesToSave.size(), e);
-                throw e;
+            int updateCount = existingByPostId.size();
+
+            // Step 2b: Bulk fetch authors
+            List<String> emails = parsedPosts.stream()
+                    .map(p -> p.request().email())
+                    .filter(Objects::nonNull)
+                    .map(s -> s.toLowerCase(Locale.ROOT))
+                    .distinct()
+                    .toList();
+
+            Map<String, AuthorEntity> authorByEmail = authorRepository.findByEmailInAllIgnoreCase(emails).stream()
+                    .collect(Collectors.toMap(
+                            a -> a.getEmail().toLowerCase(Locale.ROOT), Function.identity(), (a, b) -> a));
+
+            // Step 2c: Bulk fetch + idempotent-insert tags
+            Map<String, TagResponse> tagRequestsByName = parsedPosts.stream()
+                    .flatMap(p -> {
+                        var tags = p.request().tags();
+                        return tags != null ? tags.stream() : Stream.<TagResponse>empty();
+                    })
+                    .filter(t ->
+                            t != null && t.tagName() != null && !t.tagName().isBlank())
+                    .collect(Collectors.toMap(
+                            t -> t.tagName().toLowerCase(Locale.ROOT), Function.identity(), (a, b) -> a));
+
+            List<String> tagNames = new ArrayList<>(tagRequestsByName.keySet());
+
+            Map<String, TagEntity> tagMap = new HashMap<>();
+            if (!tagNames.isEmpty()) {
+                List<TagEntity> existingTags = tagRepository.findByTagNameInAllIgnoreCase(tagNames);
+                existingTags.forEach(t -> tagMap.put(t.getTagName().toLowerCase(Locale.ROOT), t));
+
+                List<TagEntity> newTags = tagNames.stream()
+                        .filter(name -> !tagMap.containsKey(name))
+                        .map(name -> {
+                            TagResponse tr = tagRequestsByName.get(name);
+                            TagEntity tagEntity =
+                                    new TagEntity().setTagName(tr.tagName()).setTagDescription(tr.tagDescription());
+                            tagEntity.setCreatedAt(LocalDateTime.now());
+                            return tagEntity;
+                        })
+                        .toList();
+
+                if (!newTags.isEmpty()) {
+                    String sql = "INSERT INTO tags (id, tag_name, tag_description, version, created_at) "
+                            + "VALUES (nextval('tags_seq'), ?, ?, 0, CURRENT_TIMESTAMP) "
+                            + "ON CONFLICT (lower(tag_name)) DO NOTHING";
+
+                    jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
+                        @Override
+                        public void setValues(PreparedStatement ps, int i) throws SQLException {
+                            TagEntity t = newTags.get(i);
+                            ps.setString(1, t.getTagName());
+                            ps.setString(2, t.getTagDescription());
+                        }
+
+                        @Override
+                        public int getBatchSize() {
+                            return newTags.size();
+                        }
+                    });
+
+                    // Refetch to get IDs for all tags, including newly natively inserted ones
+                    List<TagEntity> refetchedTags = tagRepository.findByTagNameInAllIgnoreCase(tagNames);
+                    refetchedTags.forEach(t -> tagMap.put(t.getTagName().toLowerCase(Locale.ROOT), t));
+                }
             }
-        }
+
+            // Step 2d: Assemble entities and save
+            List<PostEntity> entitiesToSave = parsedPosts.stream()
+                    .map(parsed -> {
+                        PostEntity entity = existingByPostId.get(Long.valueOf(parsed.postId()));
+                        if (entity != null) {
+                            // Update existing entity
+                            try {
+                                mapper.updatePostEntity(parsed.request(), entity, tagMap);
+                                log.debug("Updating existing post with postid: {}", parsed.postId());
+                            } catch (Exception e) {
+                                log.error("Failed to update post entity for postId: {}", parsed.postId(), e);
+                                throw new RuntimeException(
+                                        "Failed to update post entity for postId: " + parsed.postId(), e);
+                            }
+                        } else {
+                            // Create new entity
+                            try {
+                                entity = mapper.convert(parsed.request(), tagMap);
+                                String authorEmail = parsed.request().email();
+                                AuthorEntity author = null;
+                                if (authorEmail != null) {
+                                    author = authorByEmail.get(authorEmail.toLowerCase(Locale.ROOT));
+                                }
+                                if (author == null) {
+                                    log.warn(
+                                            "Author not found for email {}, rejecting post {}",
+                                            authorEmail,
+                                            parsed.postId());
+                                    return null; // Reject the corresponding post explicitly
+                                }
+                                entity.setAuthorEntity(author);
+                                log.debug("Creating new post with postRefId: {}", parsed.postId());
+                            } catch (Exception e) {
+                                log.error("Failed to create post entity for postId: {}", parsed.postId(), e);
+                                throw new RuntimeException(
+                                        "Failed to create post entity for postId: " + parsed.postId(), e);
+                            }
+                        }
+                        return entity;
+                    })
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toList());
+
+            if (!entitiesToSave.isEmpty()) {
+                try {
+                    postRepository.saveAll(entitiesToSave);
+                    log.debug(
+                            "Persisted batch of {} post entities ({} updates, {} inserts)",
+                            entitiesToSave.size(),
+                            updateCount,
+                            entitiesToSave.size() - updateCount);
+                } catch (Exception e) {
+                    log.error("Failed to persist batch of {} post entities", entitiesToSave.size(), e);
+                    throw e;
+                }
+            }
+        });
     }
 
     @Override

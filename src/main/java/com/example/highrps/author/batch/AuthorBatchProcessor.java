@@ -15,7 +15,7 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.json.JsonMapper;
 
 @Component
@@ -27,16 +27,19 @@ public class AuthorBatchProcessor implements EntityBatchProcessor {
     private final AuthorRepository authorRepository;
     private final JsonMapper jsonMapper;
     private final DeletionMarkerHandler deletionMarkerHandler;
+    private final TransactionTemplate transactionTemplate;
 
     public AuthorBatchProcessor(
             AuthorRequestToEntityMapper mapper,
             AuthorRepository authorRepository,
             JsonMapper jsonMapper,
-            DeletionMarkerHandler deletionMarkerHandler) {
+            DeletionMarkerHandler deletionMarkerHandler,
+            TransactionTemplate transactionTemplate) {
         this.mapper = mapper;
         this.authorRepository = authorRepository;
         this.jsonMapper = jsonMapper;
         this.deletionMarkerHandler = deletionMarkerHandler;
+        this.transactionTemplate = transactionTemplate;
     }
 
     @Override
@@ -45,9 +48,10 @@ public class AuthorBatchProcessor implements EntityBatchProcessor {
     }
 
     @Override
-    @Transactional
     public void processUpserts(List<String> payloads) {
-        // Step 1: Parse payloads and extract emails
+        // ── Phase 1 (no transaction): parse payloads + tombstone filter ──────────
+        // Redis calls and JSON parsing happen outside any DB transaction so we don't
+        // hold a connection while doing non-DB work.
         List<ParsedAuthor> parsedAuthors = payloads.stream()
                 .map(payload -> {
                     String email = extractKey(payload);
@@ -68,7 +72,7 @@ public class AuthorBatchProcessor implements EntityBatchProcessor {
                 })
                 .filter(Objects::nonNull)
                 .filter(p -> p.email() != null)
-                .collect(Collectors.toMap(ParsedAuthor::email, java.util.function.Function.identity(), (a, b) -> b))
+                .collect(Collectors.toMap(ParsedAuthor::email, Function.identity(), (a, b) -> b))
                 .values()
                 .stream()
                 .toList();
@@ -77,62 +81,66 @@ public class AuthorBatchProcessor implements EntityBatchProcessor {
             return;
         }
 
-        // Step 2: Extract all emails and fetch existing authors from DB
-        List<String> emails = parsedAuthors.stream()
-                .map(ParsedAuthor::email)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toList());
+        // ── Phase 2 (transaction): DB reads + saveAll ────────────────────────────
+        // Transaction is opened here — only wraps actual DB I/O.
+        transactionTemplate.executeWithoutResult(status -> {
+            // Step 2a: Fetch existing authors
+            List<String> emails = parsedAuthors.stream()
+                    .map(ParsedAuthor::email)
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toList());
 
-        List<AuthorEntity> existingAuthors = authorRepository.findByEmailInAllIgnoreCase(emails);
+            List<AuthorEntity> existingAuthors = authorRepository.findByEmailInAllIgnoreCase(emails);
 
-        Map<String, AuthorEntity> existingByEmail = existingAuthors.stream()
-                .collect(Collectors.toMap(
-                        a -> a.getEmail().toLowerCase(Locale.ROOT),
-                        Function.identity(),
-                        (a1, a2) -> a1)); // in case of duplicates, keep the first
+            Map<String, AuthorEntity> existingByEmail = existingAuthors.stream()
+                    .collect(Collectors.toMap(
+                            a -> a.getEmail().toLowerCase(Locale.ROOT),
+                            Function.identity(),
+                            (a1, a2) -> a1)); // in case of duplicates, keep the first
 
-        // Step 3: Process each author - update existing or create new
-        List<AuthorEntity> entitiesToSave = parsedAuthors.stream()
-                .map(parsed -> {
-                    AuthorEntity entity = existingByEmail.get(parsed.email());
-                    if (entity != null) {
-                        // Update existing entity
-                        try {
-                            mapper.updateAuthorEntity(parsed.request(), entity);
-                            log.debug("Updating existing author with email: {}", parsed.email());
-                        } catch (Exception e) {
-                            log.warn("Failed to update author entity for email: {}", parsed.email(), e);
-                            return null;
+            // Step 2b: Assemble entities
+            List<AuthorEntity> entitiesToSave = parsedAuthors.stream()
+                    .map(parsed -> {
+                        AuthorEntity entity = existingByEmail.get(parsed.email());
+                        if (entity != null) {
+                            // Update existing entity
+                            try {
+                                mapper.updateAuthorEntity(parsed.request(), entity);
+                                log.debug("Updating existing author with email: {}", parsed.email());
+                            } catch (Exception e) {
+                                log.warn("Failed to update author entity for email: {}", parsed.email(), e);
+                                return null;
+                            }
+                        } else {
+                            // Create new entity
+                            try {
+                                entity = mapper.convert(parsed.request());
+                                log.debug("Creating new author with email: {}", parsed.email());
+                            } catch (Exception e) {
+                                log.warn("Failed to create author entity for email: {}", parsed.email(), e);
+                                return null;
+                            }
                         }
-                    } else {
-                        // Create new entity
-                        try {
-                            entity = mapper.convert(parsed.request());
-                            log.debug("Creating new author with email: {}", parsed.email());
-                        } catch (Exception e) {
-                            log.warn("Failed to create author entity for email: {}", parsed.email(), e);
-                            return null;
-                        }
-                    }
-                    return entity;
-                })
-                .filter(Objects::nonNull)
-                .collect(Collectors.toList());
+                        return entity;
+                    })
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toList());
 
-        // Step 4: Save all (both new and updated)
-        if (!entitiesToSave.isEmpty()) {
-            try {
-                authorRepository.saveAll(entitiesToSave);
-                log.debug(
-                        "Persisted batch of {} author entities ({} updates, {} inserts)",
-                        entitiesToSave.size(),
-                        existingAuthors.size(),
-                        entitiesToSave.size() - existingAuthors.size());
-            } catch (Exception e) {
-                log.error("Failed to persist batch of {} author entities", entitiesToSave.size(), e);
-                throw e;
+            // Step 2c: Save all (both new and updated)
+            if (!entitiesToSave.isEmpty()) {
+                try {
+                    authorRepository.saveAll(entitiesToSave);
+                    log.debug(
+                            "Persisted batch of {} author entities ({} updates, {} inserts)",
+                            entitiesToSave.size(),
+                            existingAuthors.size(),
+                            entitiesToSave.size() - existingAuthors.size());
+                } catch (Exception e) {
+                    log.error("Failed to persist batch of {} author entities", entitiesToSave.size(), e);
+                    throw e;
+                }
             }
-        }
+        });
     }
 
     @Override

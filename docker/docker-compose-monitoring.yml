@@ -15,9 +15,29 @@ services:
       - "9187:9187"
     environment:
       DATA_SOURCE_NAME: postgresql://appuser:secret@host.docker.internal:5432/statsdb?sslmode=disable
+    volumes:
+      - ./postgres_exporter.yml:/postgres_exporter.yml:ro
+    networks:
+      - metrics-network
+
+  grafana-lgtm:
+    image: grafana/otel-lgtm:0.33.1
+    extra_hosts: ['host.docker.internal:host-gateway']
+    container_name: grafana-lgtm
+    environment:
+      - OTEL_METRIC_EXPORT_INTERVAL=500
+    ports:
+      - "3000:3000" # Grafana UI
+      - "3200:3200" # OTLP HTTP receiver for logs
+      - "4317:4317" # OTLP gRPC receiver
+      - "4318:4318" # OTLP HTTP receiver
+      - "9090:9090" # Prometheus metrics endpoint
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
     networks:
       - metrics-network
 
 networks:
   metrics-network:
+    name: metrics-network
     driver: bridge

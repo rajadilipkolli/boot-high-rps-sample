@@ -20,6 +20,7 @@ def fetch_url(url, outfile):
         print(f"Error fetching {url}: {e}")
 
 def main():
+    """Collect container logs and metrics in the local diagnostics directory."""
     out_dir = "diagnostics"
     os.makedirs(out_dir, exist_ok=True)
 
@@ -30,8 +31,12 @@ def main():
     # Logs
     run_cmd("docker logs boot-high-rps-sample-app-1", f"{out_dir}/app-1.log")
     run_cmd("docker logs boot-high-rps-sample-app-2", f"{out_dir}/app-2.log")
-    run_cmd("docker logs boot-high-rps-sample-postgresqldb-1", f"{out_dir}/postgres.log")
-    run_cmd("docker logs boot-high-rps-sample-redis-1", f"{out_dir}/redis.log")
+    run_cmd("docker logs postgresql", f"{out_dir}/postgres.log")
+    run_cmd("docker logs redis-master", f"{out_dir}/redis-master.log")
+    run_cmd("docker logs slave-redis", f"{out_dir}/slave-redis.log")
+    run_cmd("docker logs sentinel-1", f"{out_dir}/sentinel-1.log")
+    run_cmd("docker logs sentinel-2", f"{out_dir}/sentinel-2.log")
+    run_cmd("docker logs sentinel-3", f"{out_dir}/sentinel-3.log")
     run_cmd("docker logs node-exporter", f"{out_dir}/node-exporter.log")
     run_cmd("docker logs postgres-exporter", f"{out_dir}/postgres-exporter.log")
 

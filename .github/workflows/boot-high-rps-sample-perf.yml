@@ -1,4 +1,4 @@
-name: boot-high-rps-sample-perf
+﻿name: boot-high-rps-sample-perf
 
 on:
   push:
@@ -114,6 +114,10 @@ jobs:
       - name: Compare Results
         if: ${{ always() }}
         run: |
+          if [ ! -f stats.json ]; then
+            echo "stats.json not found. Skipping comparison." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
           if [ -f docs/baselines/main-baseline-$PROFILE.json ]; then
             pwsh ./scripts/compare-results.ps1 -BaselineStats docs/baselines/main-baseline-$PROFILE.json -NewStats stats.json > comparison.md
             cat comparison.md >> $GITHUB_STEP_SUMMARY
@@ -146,3 +150,4 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

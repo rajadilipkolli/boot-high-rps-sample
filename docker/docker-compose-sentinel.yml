@@ -75,4 +75,5 @@ services:
 
 networks:
   demo-network:
+    name: demo-network
     driver: bridge
