@@ -19,15 +19,28 @@ public class AggregateOperationQueue {
     private final Executor executor;
     private final MeterRegistry meterRegistry;
 
+    /** Creates an operation queue without wait-time metrics. */
     public AggregateOperationQueue() {
         this(null);
     }
 
+    /**
+     * Creates an operation queue that optionally records wait-time metrics.
+     *
+     * @param meterRegistry registry used for queue wait timers, or {@code null} to disable metrics
+     */
     public AggregateOperationQueue(MeterRegistry meterRegistry) {
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
         this.meterRegistry = meterRegistry;
     }
 
+    /**
+     * Appends an asynchronous operation to the sequence for an aggregate key.
+     *
+     * @param aggregateKey key whose operations must execute sequentially
+     * @param operation asynchronous operation to invoke when prior work finishes
+     * @return a future completed with the queued operation
+     */
     public CompletableFuture<Void> enqueue(String aggregateKey, Supplier<CompletableFuture<Void>> operation) {
         AtomicReference<CompletableFuture<Void>> currentRef = new AtomicReference<>();
         long enqueueTime = System.nanoTime();

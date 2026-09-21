@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+/** Removes deleted aggregate views from Redis with bounded asynchronous retries. */
 @Service
 public class RedisViewCleanupService {
 
@@ -19,11 +20,23 @@ public class RedisViewCleanupService {
     private final MeterRegistry meterRegistry;
     private final Executor executor;
 
+    /**
+     * Creates a cleanup service that records exhausted retries.
+     *
+     * @param meterRegistry registry used for cleanup failure counters
+     */
     public RedisViewCleanupService(MeterRegistry meterRegistry) {
         this.meterRegistry = meterRegistry;
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
     }
 
+    /**
+     * Runs a Redis delete action asynchronously and retries transient failures.
+     *
+     * @param entityLabel entity type attached to logs and metrics
+     * @param deleteAction action that removes the Redis view
+     * @return a future completed when deletion succeeds or all attempts are exhausted
+     */
     public CompletableFuture<Void> cleanupAsync(String entityLabel, Runnable deleteAction) {
         return CompletableFuture.runAsync(
                 () -> {

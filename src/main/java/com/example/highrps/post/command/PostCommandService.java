@@ -47,6 +47,8 @@ public class PostCommandService extends AbstractCommandService {
     /**
      * Creates a post command service with its event, cache, and persistence collaborators.
      *
+     * @param redisTemplate Redis operations used for reservations
+     * @param jsonMapper serializes command events
      * @param localCache local post cache
      * @param postRedisRepository Redis post repository
      * @param deletionMarkerHandler handler for deleted aggregates

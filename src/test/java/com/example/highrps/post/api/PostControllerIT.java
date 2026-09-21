@@ -484,6 +484,7 @@ class PostControllerIT extends AbstractIntegrationTest {
                 .hasContentType(MediaType.APPLICATION_PROBLEM_JSON);
     }
 
+    /** Verifies a deletion marker prevents a delayed update from recreating a deleted Redis view. */
     @Test
     @DisplayName("Should prevent create or update after delete due to deletion marker")
     void shouldPreventCreateOrUpdateAfterDelete() {

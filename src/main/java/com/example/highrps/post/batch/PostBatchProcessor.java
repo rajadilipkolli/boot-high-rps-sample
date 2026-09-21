@@ -48,6 +48,18 @@ public class PostBatchProcessor implements EntityBatchProcessor {
     private final EntityManager entityManager;
     private final JdbcTemplate jdbcTemplate;
 
+    /**
+     * Creates a processor with the collaborators used to persist post batches.
+     *
+     * @param mapper maps incoming requests to post entities
+     * @param postRepository post persistence repository
+     * @param tagRepository tag persistence repository
+     * @param jsonMapper parses queued post payloads
+     * @param authorRepository author persistence repository
+     * @param deletionMarkerHandler checks whether posts were recently deleted
+     * @param entityManager loads existing posts in bulk
+     * @param jdbcTemplate inserts new tags in batches
+     */
     public PostBatchProcessor(
             NewPostRequestToPostEntityMapper mapper,
             PostRepository postRepository,
@@ -72,6 +84,7 @@ public class PostBatchProcessor implements EntityBatchProcessor {
         return "post";
     }
 
+    /** {@inheritDoc} */
     @Override
     @Transactional
     public void processUpserts(List<String> payloads) {
@@ -164,6 +177,7 @@ public class PostBatchProcessor implements EntityBatchProcessor {
                         + "ON CONFLICT (lower(tag_name)) DO NOTHING";
 
                 jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
+                    /** {@inheritDoc} */
                     @Override
                     public void setValues(PreparedStatement ps, int i) throws SQLException {
                         TagEntity t = newTags.get(i);
@@ -171,6 +185,7 @@ public class PostBatchProcessor implements EntityBatchProcessor {
                         ps.setString(2, t.getTagDescription());
                     }
 
+                    /** {@inheritDoc} */
                     @Override
                     public int getBatchSize() {
                         return newTags.size();

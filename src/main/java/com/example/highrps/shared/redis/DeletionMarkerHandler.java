@@ -27,6 +27,12 @@ public class DeletionMarkerHandler {
     private final RedisTemplate<String, String> redis;
     private final MeterRegistry meterRegistry;
 
+    /**
+     * Creates a handler backed by Redis with optional write timing.
+     *
+     * @param redis Redis operations used to store markers
+     * @param meterRegistry registry used for marker write timers, or {@code null} to disable metrics
+     */
     public DeletionMarkerHandler(RedisTemplate<String, String> redis, MeterRegistry meterRegistry) {
         this.redis = redis;
         this.meterRegistry = meterRegistry;

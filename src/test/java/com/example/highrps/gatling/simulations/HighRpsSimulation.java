@@ -77,6 +77,12 @@ public class HighRpsSimulation extends Simulation {
         return !"smoke".equalsIgnoreCase(profile);
     }
 
+    /**
+     * Builds global assertions and optional per-operation latency assertions.
+     *
+     * @param includePerOperationLatencyAssertions whether each operation should enforce latency thresholds
+     * @return assertions for the active load-test profile
+     */
     static List<Assertion> assertionsForProfile(boolean includePerOperationLatencyAssertions) {
         List<Assertion> assertions = new ArrayList<>();
         assertions.add(global().failedRequests().percent().lte(LoadTestConfig.MAX_ERROR_RATE));

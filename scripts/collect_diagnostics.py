@@ -20,6 +20,7 @@ def fetch_url(url, outfile):
         print(f"Error fetching {url}: {e}")
 
 def main():
+    """Collect container logs and metrics in the local diagnostics directory."""
     out_dir = "diagnostics"
     os.makedirs(out_dir, exist_ok=True)
 
