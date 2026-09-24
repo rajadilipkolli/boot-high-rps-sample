@@ -53,9 +53,9 @@ jobs:
       - name: Setup Profile Inputs
         id: config
         env:
-          PROFILE_INPUT: ${{ github.event.inputs.profile || 'normal' }}
+          PROFILE_INPUT: ${{ github.event.inputs.profile || 'high' }}
           DURATION_INPUT: ${{ github.event.inputs.durationMinutes || '15' }}
-          TARGET_RPS_INPUT: ${{ github.event.inputs.targetRps }}
+          TARGET_RPS_INPUT: ${{ github.event.inputs.targetRps || '10000' }}
           POST_UPDATE_WEIGHT: ${{ github.event.inputs.postUpdateWeight || '1.0' }}
           POST_DELETE_WEIGHT: ${{ github.event.inputs.postDeleteWeight || '1.0' }}
           COMMENT_UPDATE_WEIGHT: ${{ github.event.inputs.commentUpdateWeight || '1.0' }}
