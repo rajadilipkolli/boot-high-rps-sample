@@ -1,4 +1,4 @@
-﻿# Load Testing Guide
+# Load Testing Guide
 
 This document outlines the procedure to load test `boot-high-rps-sample` and evaluate its maximum sustainable RPS.
 
@@ -14,9 +14,7 @@ Baseline and high-RPS runs must keep the dataset (including mutable/deletable po
 5. Wait for http://localhost:8080/actuator/health to report UP.
 6. Generate data: ./mvnw exec:java -Dexec.mainClass="com.example.highrps.gatling.setup.DataGenerator" -Dexec.classpathScope=test
 
-Alternatively, use the orchestration scripts:
-- `../scripts/test-local.ps1` is the self-contained script used by CI.
-- `../scripts/run-load-test.ps1` assumes a manually started app (like in the steps above).
+Alternatively, use `../scripts/run-gatling-test.ps1` — the self-contained script used by CI that handles infra startup, build, data generation, and the Gatling run in one step. If the app is already running manually (steps above), run `./mvnw gatling:test -Dprofile=<profile>` directly.
 
 The data generator builds shared read/create pools, as well as dedicated mutable and deletable pools. The deletable pools are sized large enough so each run uses them as a non-repeating queue. For longer runs, increase the deletable pool sizes in your config to avoid starvation.
 

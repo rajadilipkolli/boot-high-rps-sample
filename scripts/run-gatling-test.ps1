@@ -41,14 +41,20 @@ docker compose -p boot-high-rps-sample -f docker/docker-compose.yml up -d
 docker compose -p boot-high-rps-sample -f docker/docker-compose-monitoring.yml up -d
 
 Write-Host "Building app..."
-if ($IsWindows) {
+if ($env:OS -eq 'Windows_NT') {
     cmd /c "mvnw.cmd clean package -DskipTests"
 } else {
     sh -c "./mvnw clean package -DskipTests"
 }
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Maven build failed!"
+    exit 1
+}
+
+Write-Host "Building Docker image..."
 docker compose -p boot-high-rps-sample -f docker/docker-compose.yml build app
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "Build failed!"
+    Write-Host "Docker image build failed!"
     exit 1
 }
 
@@ -87,7 +93,7 @@ if ((Test-Path -LiteralPath $CompletionMarker -PathType Leaf) -and $RequiredFeed
     }
 
     Write-Host "App is UP! Running Data Generator..."
-    if ($IsWindows) {
+    if ($env:OS -eq 'Windows_NT') {
         cmd /c "mvnw.cmd exec:java -Dexec.mainClass=com.example.highrps.gatling.setup.DataGenerator -Dexec.classpathScope=test -DdataDir=$DataDirectory -Dprofile=$Profile"
     } else {
         sh -c "./mvnw exec:java -Dexec.mainClass=com.example.highrps.gatling.setup.DataGenerator -Dexec.classpathScope=test -DdataDir=$DataDirectory -Dprofile=$Profile"
@@ -107,7 +113,7 @@ if ((Test-Path -LiteralPath $CompletionMarker -PathType Leaf) -and $RequiredFeed
 }
 
 Write-Host "Running Gatling with Profile: $Profile..."
-if ($IsWindows) {
+if ($env:OS -eq 'Windows_NT') {
     cmd /c "mvnw.cmd gatling:test -Dprofile=$Profile -DdurationMinutes=$DurationMinutes -DwarmupMinutes=$WarmupMinutes"
 } else {
     sh -c "./mvnw gatling:test -Dprofile=$Profile -DdurationMinutes=$DurationMinutes -DwarmupMinutes=$WarmupMinutes"

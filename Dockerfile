@@ -20,4 +20,4 @@ ENTRYPOINT ["java", \
 
 # Health check for container orchestration
 HEALTHCHECK --interval=30s --timeout=3s --start-period=40s \
-  CMD java -cp /app.jar org.springframework.boot.loader.tools.HealthCheckClient http://localhost:8080/actuator/health || exit 1
+  CMD curl -sf http://localhost:8080/actuator/health || exit 1
