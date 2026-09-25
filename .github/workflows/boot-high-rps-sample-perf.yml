@@ -91,7 +91,11 @@ jobs:
         run: |
           # We are already on the triggered commit (HEAD)
           set +e
-          pwsh ./scripts/run-gatling-test.ps1 -Profile $PROFILE -DurationMinutes $DURATION -WarmupMinutes 0 -TargetRps $TARGET_RPS
+          if [ -n "$TARGET_RPS" ]; then
+            pwsh ./scripts/run-gatling-test.ps1 -Profile $PROFILE -DurationMinutes $DURATION -WarmupMinutes 0 -TargetRps "$TARGET_RPS"
+          else
+            pwsh ./scripts/run-gatling-test.ps1 -Profile $PROFILE -DurationMinutes $DURATION -WarmupMinutes 0
+          fi
           GATLING_EXIT_CODE=$?
           set -e
           
@@ -108,7 +112,7 @@ jobs:
         if: ${{ always() }}
         run: |
           python3 ./scripts/collect_diagnostics.py
-          
+
       - name: Upload Diagnostics
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
@@ -134,7 +138,7 @@ jobs:
           else
             echo "No baseline found to compare against. This run will establish the first baseline." >> $GITHUB_STEP_SUMMARY
           fi
-          
+
       - name: Upload Gatling Report
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
@@ -142,7 +146,7 @@ jobs:
           name: gatling-report
           path: gatling-report/
           retention-days: 14
-          
+
       - name: Update baseline on main branch
         if: success() && github.ref == 'refs/heads/main'
         run: |
