@@ -85,17 +85,18 @@ Suggestions & next steps
 ## Throughput Benchmarks (ApiLoadBenchmark)
 We ran JMH benchmarks on the local environment simulating a workload of 90% read threads and 10% write threads.
 
-| Metric                                                        | Total ops/s    | Read ops/s     | Write ops/s      |
-|---------------------------------------------------------------|----------------|----------------|------------------|
-| Before (100 Threads)                                          | ~867 ops/s     | ~762 ops/s     | ~104 ops/s       |
-| After Async Refactoring (100 Threads)                         | ~867 ops/s     | ~762 ops/s     | ~104 ops/s       |
-| After Async Refactoring (500 Threads)                         | ~825 ops/s     | ~739 ops/s     | ~85 ops/s        |
-| After Removing Redis Sync Writes & Batch Tuning (500 Threads) | ~819 ops/s     | ~591 ops/s     | ~227 ops/s       |
-| After Idempotency Implementation (500 Threads)                | ~156 ops/s     | ~149 ops/s     | ~7 ops/s         |
-| After Idempotency Lua Script (100 Threads)                    | ~443 ops/s     | ~435 ops/s     | ~8 ops/s         |
-| After Offloading Idempotency (100 Threads)                    | ~266 ops/s     | ~261 ops/s     | ~5 ops/s         |
+| Metric                                                        | Total ops/s | Read ops/s  | Write ops/s |
+|---------------------------------------------------------------|-------------|-------------|-------------|
+| Before (100 Threads)                                          | ~867 ops/s  | ~762 ops/s  | ~104 ops/s  |
+| After Async Refactoring (100 Threads)                         | ~867 ops/s  | ~762 ops/s  | ~104 ops/s  |
+| After Async Refactoring (500 Threads)                         | ~825 ops/s  | ~739 ops/s  | ~85 ops/s   |
+| After Removing Redis Sync Writes & Batch Tuning (500 Threads) | ~819 ops/s  | ~591 ops/s  | ~227 ops/s  |
+| After Idempotency Implementation (500 Threads)                | ~156 ops/s  | ~149 ops/s  | ~7 ops/s    |
+| After Idempotency Lua Script (100 Threads)                    | ~443 ops/s  | ~435 ops/s  | ~8 ops/s    |
+| After Offloading Idempotency (100 Threads)                    | ~266 ops/s  | ~261 ops/s  | ~5 ops/s    |
+| Current (500 Threads, local, 2026-09-25, pool=200)            | ~1280 ops/s | ~1269 ops/s | ~11 ops/s   |
 
-**Note on Redis Sync Optimization:** By eliminating redundant, blocking network I/O calls to Redis from the API hot-path (and delegating asynchronous event processing to the Redis Streams `events:queue` and `ScheduledBatchProcessor` flow), the application achieves a **~2.6x increase in write-throughput concurrency** (227 ops/s up from 85 ops/s) under extreme load (500 threads).
+> **Note (2026-09-25 run):** Pool size raised from 90 → 200 per instance (Postgres `max_connections` raised to 500). Write throughput improved **+58%** (7 → 11 ops/s) and reads **+63%** (777 → 1269 ops/s) vs the previous run. High per-iteration variance observed (1906 ops/s vs 653 ops/s across the two measurement iterations) — a stale-connection recycle during the second iteration is the likely cause (`Failed to validate connection — This connection has been closed`). More iterations would be needed for a stable mean.
 
 **Key Takeaways:**
 - **Zero-Serialization Reads**: Utilizing a multi-layered local Caffeine cache in combination with Redis materialized views allows `GET` queries to bypass JSON serialization overhead entirely. The read throughput achieves native memory-like speed.

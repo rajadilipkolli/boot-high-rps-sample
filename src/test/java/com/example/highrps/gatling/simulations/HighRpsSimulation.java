@@ -1,12 +1,27 @@
 package com.example.highrps.gatling.simulations;
 
-import static io.gatling.javaapi.core.CoreDsl.*;
-import static io.gatling.javaapi.http.HttpDsl.*;
+import static io.gatling.javaapi.core.CoreDsl.constantUsersPerSec;
+import static io.gatling.javaapi.core.CoreDsl.details;
+import static io.gatling.javaapi.core.CoreDsl.global;
+import static io.gatling.javaapi.core.CoreDsl.nothingFor;
+import static io.gatling.javaapi.core.CoreDsl.percent;
+import static io.gatling.javaapi.core.CoreDsl.rampUsersPerSec;
+import static io.gatling.javaapi.core.CoreDsl.scenario;
+import static io.gatling.javaapi.http.HttpDsl.http;
 
 import com.example.highrps.gatling.config.LoadTestConfig;
-import com.example.highrps.gatling.scenarios.*;
-import io.gatling.javaapi.core.*;
-import io.gatling.javaapi.http.*;
+import com.example.highrps.gatling.scenarios.AuthorScenario;
+import com.example.highrps.gatling.scenarios.CommentScenario;
+import com.example.highrps.gatling.scenarios.PostScenario;
+import com.example.highrps.gatling.scenarios.ReadCommentsScenario;
+import com.example.highrps.gatling.scenarios.ReadPostScenario;
+import com.example.highrps.gatling.scenarios.TagScenario;
+import io.gatling.javaapi.core.Assertion;
+import io.gatling.javaapi.core.OpenInjectionStep;
+import io.gatling.javaapi.core.PopulationBuilder;
+import io.gatling.javaapi.core.ScenarioBuilder;
+import io.gatling.javaapi.core.Simulation;
+import io.gatling.javaapi.http.HttpProtocolBuilder;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -74,7 +89,8 @@ public class HighRpsSimulation extends Simulation {
     }
 
     static boolean includePerOperationLatencyAssertions(String profile) {
-        return !"smoke".equalsIgnoreCase(profile);
+        // smoke: too short to be stable; stress: intentionally breaches normal latency ceilings at 500-1000 RPS
+        return !("smoke".equalsIgnoreCase(profile) || "stress".equalsIgnoreCase(profile));
     }
 
     /**
@@ -122,6 +138,21 @@ public class HighRpsSimulation extends Simulation {
     /**
      * Builds the user-injection schedule for the selected load profile.
      *
+     * <p>For the stress profile the schedule is:
+     * <ol>
+     *   <li>5s nothing</li>
+     *   <li>optional warmup ramp</li>
+     *   <li>durationMins @ 100 RPS</li>
+     *   <li>rampDuration ramp 100→250</li>
+     *   <li>durationMins @ 250 RPS</li>
+     *   <li>rampDuration ramp 250→500</li>
+     *   <li>durationMins @ 500 RPS</li>
+     *   <li>rampDuration ramp 500→1000</li>
+     *   <li>durationMins @ 1000 RPS</li>
+     * </ol>
+     * The ramp duration is {@code max(1, min(5, durationMins))} minutes,
+     * so a {@code durationMins=1} run takes ~8 min total instead of ~20 min.
+     *
      * @param stressProfile whether to use the stepped stress schedule
      * @param targetRps the steady-state request rate
      * @param durationMins the duration of each steady-state stage
@@ -139,12 +170,14 @@ public class HighRpsSimulation extends Simulation {
         }
 
         if (stressProfile) {
+            // Ramp duration scales with plateau: max(1, min(5, durationMins))
+            int rampMins = Math.clamp(durationMins, 1, 5);
             steps.add(constantUsersPerSec(100).during(Duration.ofMinutes(durationMins)));
-            steps.add(rampUsersPerSec(100).to(250).during(Duration.ofMinutes(5)));
+            steps.add(rampUsersPerSec(100).to(250).during(Duration.ofMinutes(rampMins)));
             steps.add(constantUsersPerSec(250).during(Duration.ofMinutes(durationMins)));
-            steps.add(rampUsersPerSec(250).to(500).during(Duration.ofMinutes(5)));
+            steps.add(rampUsersPerSec(250).to(500).during(Duration.ofMinutes(rampMins)));
             steps.add(constantUsersPerSec(500).during(Duration.ofMinutes(durationMins)));
-            steps.add(rampUsersPerSec(500).to(1000).during(Duration.ofMinutes(5)));
+            steps.add(rampUsersPerSec(500).to(1000).during(Duration.ofMinutes(rampMins)));
             steps.add(constantUsersPerSec(1000).during(Duration.ofMinutes(durationMins)));
         } else {
             steps.add(constantUsersPerSec(targetRps).during(Duration.ofMinutes(durationMins)));
