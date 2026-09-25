@@ -1,12 +1,18 @@
 package com.example.highrps.author.batch;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 import com.example.highrps.author.domain.AuthorEntity;
 import com.example.highrps.common.AbstractIntegrationTest;
+import com.example.highrps.infrastructure.batch.ScheduledBatchProcessor;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -87,5 +93,85 @@ class AuthorBatchProcessorIT extends AbstractIntegrationTest {
         authorBatchProcessor.processDeletes(List.of("d1@example.com", "D2@Example.com"));
 
         assertThat(authorRepository.findAll()).isEmpty();
+    }
+
+    /**
+     * Reproduces concurrent duplicate writes for the same email.
+     * Two threads call processUpserts simultaneously for one new email.
+     * Asserts exactly one persisted author row and no exception leaking out.
+     */
+    @Test
+    void processUpserts_concurrentWritesSameEmail_resultsInExactlyOneRow() throws InterruptedException {
+        String email = "concurrent@example.com";
+        String payload = """
+                {"firstName":"Concurrent","middleName":null,"lastName":"User","mobile":5555555555,"email":"%s"}
+                """.formatted(email);
+
+        CountDownLatch startLatch = new CountDownLatch(1);
+        CountDownLatch doneLatch = new CountDownLatch(2);
+        Throwable[] errors = new Throwable[2];
+
+        try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+            for (int i = 0; i < 2; i++) {
+                final int idx = i;
+                executor.submit(() -> {
+                    try {
+                        startLatch.await(); // wait for both threads to be ready
+                        authorBatchProcessor.processUpserts(List.of(payload));
+                    } catch (Throwable t) {
+                        errors[idx] = t;
+                    } finally {
+                        doneLatch.countDown();
+                    }
+                });
+            }
+
+            // Release both threads simultaneously
+            startLatch.countDown();
+            assertThat(doneLatch.await(30, TimeUnit.SECONDS)).isTrue();
+        }
+
+        // No exception should have leaked out
+        assertThat(errors[0]).isNull();
+        assertThat(errors[1]).isNull();
+
+        // Exactly one row must exist
+        await().atMost(Duration.ofSeconds(10))
+                .untilAsserted(() -> assertThat(authorRepository.findAll().stream()
+                                .filter(a -> email.equalsIgnoreCase(a.getEmail()))
+                                .count())
+                        .isEqualTo(1));
+    }
+
+    /**
+     * Tests different payloads for the same email processed via the scheduler.
+     * The scheduler deduplicates by key, so only one payload reaches processUpserts.
+     * Asserts exactly one persisted row and uses the scheduledBatchProcessors pattern.
+     */
+    @Test
+    void processUpserts_viaScheduler_deduplicatesSameEmail() {
+        String email = "scheduled@example.com";
+        String payload1 = """
+                {"firstName":"First","middleName":null,"lastName":"User","mobile":1111111111,"email":"%s","__entity":"author"}
+                """.formatted(email);
+        String payload2 = """
+                {"firstName":"Second","middleName":null,"lastName":"User","mobile":2222222222,"email":"%s","__entity":"author"}
+                """.formatted(email);
+
+        // Enqueue both payloads to the stream
+        String queueKey = "events:queue";
+        redisTemplate.opsForStream().add(queueKey, Map.of("payload", payload1));
+        redisTemplate.opsForStream().add(queueKey, Map.of("payload", payload2));
+
+        // Trigger batch processing via the scheduler pattern
+        await().atMost(Duration.ofSeconds(30))
+                .pollInterval(Duration.ofSeconds(1))
+                .untilAsserted(() -> {
+                    scheduledBatchProcessors.forEach(ScheduledBatchProcessor::processBatch);
+                    assertThat(authorRepository.findAll().stream()
+                                    .filter(a -> email.equalsIgnoreCase(a.getEmail()))
+                                    .count())
+                            .isEqualTo(1);
+                });
     }
 }

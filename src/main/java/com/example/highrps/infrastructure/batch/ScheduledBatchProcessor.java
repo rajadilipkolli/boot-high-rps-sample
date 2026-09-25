@@ -17,6 +17,7 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Range;
 import org.springframework.data.redis.connection.stream.*;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -375,6 +376,13 @@ public class ScheduledBatchProcessor {
         }
     }
 
+    /**
+     * Retries each payload separately after a batch upsert fails. Failed payloads are sent to the
+     * dead-letter queue with a reason derived from the exception; only successful record IDs are
+     * returned for acknowledgement.
+     *
+     * @return record IDs whose individual upserts succeeded
+     */
     private List<String> processUpsertsIndividually(EntityBatchProcessor processor, List<PayloadOrTombstone> payloads) {
         String entityType = processor.getEntityType();
         List<String> ackIds = new ArrayList<>();
@@ -384,15 +392,53 @@ public class ScheduledBatchProcessor {
                 processor.processUpserts(List.of(p.payload()));
                 ackIds.add(p.recordId());
             } catch (Exception e) {
-                log.error("Failed individual upsert for {}, moving to DLQ", entityType, e);
-                moveToDlq(
-                        appProperties.getBatch().getQueueKey(),
-                        p.payload(),
-                        "individual_upsert_failed: " + e.getMessage(),
-                        p.recordId());
+                String dlqReason = resolveUpsertFailureReason(e);
+                log.error("Failed individual upsert for {}, moving to DLQ with reason={}", entityType, dlqReason, e);
+                moveToDlq(appProperties.getBatch().getQueueKey(), p.payload(), dlqReason, p.recordId());
             }
         }
         return ackIds;
+    }
+
+    /**
+     * Formats a dead-letter reason from the first recognized cause. A
+     * {@link UniqueConstraintConflictException} contributes its supplied constraint label and keys;
+     * any {@link DataIntegrityViolationException} is classified as a constraint conflict, using a
+     * quoted PostgreSQL constraint name when present or {@code unknown} otherwise. Other failures
+     * use the original exception message.
+     *
+     * @return a {@code unique_constraint_conflict} or {@code individual_upsert_failed} reason
+     */
+    static String resolveUpsertFailureReason(Throwable e) {
+        Throwable current = e;
+        while (current != null) {
+            if (current instanceof UniqueConstraintConflictException ucce) {
+                return "unique_constraint_conflict: constraint=" + ucce.getConstraintName() + " keys="
+                        + ucce.getConflictingKeys();
+            }
+            if (current instanceof DataIntegrityViolationException) {
+                String msg = current.getMessage();
+                // Try to extract constraint name from the violation message
+                String constraintHint = msg != null ? extractConstraintName(msg) : "unknown";
+                return "unique_constraint_conflict: constraint=" + constraintHint;
+            }
+            current = current.getCause();
+        }
+        return "individual_upsert_failed: " + e.getMessage();
+    }
+
+    private static String extractConstraintName(String message) {
+        // Common PostgreSQL violation message format:
+        // "...violates unique constraint "constraint_name"..."
+        int idx = message.indexOf("unique constraint \"");
+        if (idx >= 0) {
+            int start = idx + "unique constraint \"".length();
+            int end = message.indexOf('"', start);
+            if (end > start) {
+                return message.substring(start, end);
+            }
+        }
+        return "unknown";
     }
 
     private List<String> processDeletesIndividually(EntityBatchProcessor processor, List<PayloadOrTombstone> keys) {

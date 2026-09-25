@@ -91,7 +91,7 @@ jobs:
         run: |
           # We are already on the triggered commit (HEAD)
           set +e
-          pwsh ./scripts/run-gatling-test.ps1 -Profile $PROFILE -DurationMinutes $DURATION -WarmupMinutes 0
+          pwsh ./scripts/run-gatling-test.ps1 -Profile $PROFILE -DurationMinutes $DURATION -WarmupMinutes 0 -TargetRps $TARGET_RPS
           GATLING_EXIT_CODE=$?
           set -e
           

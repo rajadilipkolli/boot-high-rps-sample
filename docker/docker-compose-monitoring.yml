@@ -24,6 +24,8 @@ services:
     image: grafana/otel-lgtm:0.33.1
     extra_hosts: ['host.docker.internal:host-gateway']
     container_name: grafana-lgtm
+    profiles:
+      - monitoring
     environment:
       - OTEL_METRIC_EXPORT_INTERVAL=500
     ports:

@@ -1,13 +1,18 @@
 package com.example.highrps.postcomment.batch;
 
 import com.example.highrps.infrastructure.batch.EntityBatchProcessor;
+import com.example.highrps.infrastructure.batch.UniqueConstraintConflictException;
 import com.example.highrps.post.domain.PostEntity;
 import com.example.highrps.post.domain.PostRepository;
 import com.example.highrps.postcomment.command.PostCommentCommandResult;
 import com.example.highrps.postcomment.domain.PostCommentEntity;
 import com.example.highrps.postcomment.domain.PostCommentRepository;
 import com.example.highrps.shared.redis.DeletionMarkerHandler;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.sql.Types;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -16,6 +21,8 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.jdbc.core.BatchPreparedStatementSetter;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.json.JsonMapper;
@@ -29,18 +36,21 @@ public class PostCommentBatchProcessor implements EntityBatchProcessor {
     private final JsonMapper jsonMapper;
     private final DeletionMarkerHandler deletionMarkerHandler;
     private final TransactionTemplate transactionTemplate;
+    private final JdbcTemplate jdbcTemplate;
 
     public PostCommentBatchProcessor(
             PostCommentRepository postCommentRepository,
             PostRepository postRepository,
             JsonMapper jsonMapper,
             DeletionMarkerHandler deletionMarkerHandler,
-            TransactionTemplate transactionTemplate) {
+            TransactionTemplate transactionTemplate,
+            JdbcTemplate jdbcTemplate) {
         this.postCommentRepository = postCommentRepository;
         this.postRepository = postRepository;
         this.jsonMapper = jsonMapper;
         this.deletionMarkerHandler = deletionMarkerHandler;
         this.transactionTemplate = transactionTemplate;
+        this.jdbcTemplate = jdbcTemplate;
     }
 
     @Override
@@ -48,6 +58,15 @@ public class PostCommentBatchProcessor implements EntityBatchProcessor {
         return "post-comment";
     }
 
+    /**
+     * Applies the last payload for each comment ID when its parent post exists.
+     * Payloads with a deletion marker, invalid JSON, missing IDs, or a missing parent are skipped.
+     * Update failures are caught after insertion is attempted, so a newly inserted row may remain.
+     * Database failures propagate and roll back the batch.
+     *
+     * @param payloads serialized comment results
+     * @throws UniqueConstraintConflictException if a candidate comment is absent after insertion and refetch
+     */
     @Override
     public void processUpserts(List<String> payloads) {
         // ── Phase 1 (no transaction): parse payloads + tombstone filter ──────────
@@ -82,74 +101,105 @@ public class PostCommentBatchProcessor implements EntityBatchProcessor {
             return;
         }
 
-        // ── Phase 2 (transaction): DB reads + saveAll ────────────────────────────
+        // ── Phase 2 (transaction): DB reads + native insert + locked refetch + saveAll ─
         // Transaction is opened here — only wraps actual DB I/O.
         transactionTemplate.executeWithoutResult(status -> {
-            // Step 2a: Fetch existing comments
-            List<Long> commentIds =
-                    parsedComments.stream().map(ParsedComment::commentId).collect(Collectors.toList());
-
-            List<PostCommentEntity> existingComments = postCommentRepository.findByCommentRefIdIn(commentIds);
-
-            Map<Long, PostCommentEntity> existingById = existingComments.stream()
-                    .collect(Collectors.toMap(PostCommentEntity::getCommentRefId, Function.identity(), (e1, e2) -> e1));
-
-            // Step 2b: Fetch parent posts for new comments only
-            Set<Long> newPostIds = parsedComments.stream()
-                    .filter(p -> !existingById.containsKey(p.commentId()))
-                    .map(ParsedComment::postId)
-                    .collect(Collectors.toSet());
-            Map<Long, PostEntity> postsById = postRepository.findByPostRefIdIn(new ArrayList<>(newPostIds)).stream()
+            // Step 2a: Fetch parent posts for new comments only (preserve parent lookup)
+            Set<Long> allPostIds =
+                    parsedComments.stream().map(ParsedComment::postId).collect(Collectors.toSet());
+            Map<Long, PostEntity> postsById = postRepository.findByPostRefIdIn(new ArrayList<>(allPostIds)).stream()
                     .collect(Collectors.toMap(PostEntity::getPostRefId, Function.identity()));
 
-            // Step 2c: Assemble entities
-            List<PostCommentEntity> entitiesToSave = parsedComments.stream()
-                    .map(parsed -> {
-                        PostCommentEntity entity = existingById.get(parsed.commentId());
-                        if (entity != null) {
-                            // Update existing entity
-                            try {
-                                updateCommentEntity(parsed.result(), entity);
-                                log.debug("Updating existing comment with id: {}", parsed.commentId());
-                            } catch (Exception e) {
-                                log.warn("Failed to update comment entity for id: {}", parsed.commentId(), e);
-                                return null;
-                            }
-                        } else {
-                            // Create new entity
-                            try {
-                                PostEntity postEntity = postsById.get(parsed.postId());
-                                if (postEntity == null) {
-                                    log.warn(
-                                            "Post not found for postRefId: {}, skipping commentRef: {}",
-                                            parsed.postId(),
-                                            parsed.commentId());
-                                    return null;
-                                }
-                                entity = createCommentEntity(parsed.result(), postEntity);
-                                log.debug("Creating new comment with id: {}", parsed.commentId());
-                            } catch (Exception e) {
-                                log.warn("Failed to create comment entity for id: {}", parsed.commentId(), e);
-                                return null;
-                            }
+            // Step 2b: Filter candidates that have a valid parent post (preserve skip for missing parent)
+            List<ParsedComment> candidates = parsedComments.stream()
+                    .filter(p -> {
+                        if (!postsById.containsKey(p.postId())) {
+                            log.warn(
+                                    "Post not found for postRefId: {}, skipping commentRef: {}",
+                                    p.postId(),
+                                    p.commentId());
+                            return false;
                         }
-                        return entity;
+                        return true;
                     })
-                    .filter(Objects::nonNull)
                     .collect(Collectors.toList());
 
-            // Step 2d: Save all (both new and updated)
+            if (candidates.isEmpty()) {
+                return;
+            }
+
+            // Sort by commentRefId to guarantee consistent lock-acquisition order.
+            candidates.sort(Comparator.comparing(ParsedComment::commentId));
+
+            List<Long> commentIds =
+                    candidates.stream().map(ParsedComment::commentId).collect(Collectors.toList());
+
+            // Step 2c: Insert genuinely new rows with resolved post_id (no conflict target).
+            String insertSql = "INSERT INTO post_comments "
+                    + "(id, comment_ref_id, title, content, published, published_at, post_id, version, created_at, modified_at) "
+                    + "VALUES (nextval('post_comments_seq'), ?, ?, ?, ?, ?, "
+                    + "       (SELECT id FROM posts WHERE post_ref_id = ?), "
+                    + "       0, now(), now()) "
+                    + "ON CONFLICT (comment_ref_id) DO NOTHING";
+
+            jdbcTemplate.batchUpdate(insertSql, new BatchPreparedStatementSetter() {
+                @Override
+                public void setValues(PreparedStatement ps, int i) throws SQLException {
+                    ParsedComment p = candidates.get(i);
+                    PostCommentCommandResult r = p.result();
+                    ps.setLong(1, p.commentId());
+                    ps.setString(2, r.title());
+                    ps.setString(3, r.content());
+                    ps.setBoolean(4, r.published());
+                    if (r.publishedAt() != null) {
+                        ps.setObject(5, r.publishedAt().toLocalDateTime());
+                    } else {
+                        ps.setNull(5, Types.TIMESTAMP);
+                    }
+                    ps.setLong(6, p.postId());
+                }
+
+                @Override
+                public int getBatchSize() {
+                    return candidates.size();
+                }
+            });
+
+            // Step 2d: Refetch under pessimistic write lock.
+            List<PostCommentEntity> lockedComments = postCommentRepository.findByCommentRefIdInWithLock(commentIds);
+
+            Map<Long, PostCommentEntity> lockedById = lockedComments.stream()
+                    .collect(Collectors.toMap(PostCommentEntity::getCommentRefId, Function.identity(), (e1, e2) -> e1));
+
+            // Step 2e: Assemble entities.
+            List<PostCommentEntity> entitiesToSave = new ArrayList<>();
+            for (ParsedComment parsed : candidates) {
+                PostCommentEntity entity = lockedById.get(parsed.commentId());
+
+                if (entity == null) {
+                    // Row missing after insert → concurrent conflict.
+                    // Throw Phase-1 conflict exception.
+                    throw new UniqueConstraintConflictException(
+                            "post-comment",
+                            "uc_postcommententity_comment_ref_id",
+                            List.of(String.valueOf(parsed.commentId())));
+                }
+
+                try {
+                    updateCommentEntity(parsed.result(), entity);
+                    log.debug("Upserting comment with id: {}", parsed.commentId());
+                    entitiesToSave.add(entity);
+                } catch (Exception e) {
+                    log.warn("Failed to update comment entity for id: {}", parsed.commentId(), e);
+                    // Preserve existing skip-on-failure behaviour.
+                }
+            }
+
+            // Step 2f: Save all (both new and updated)
             if (!entitiesToSave.isEmpty()) {
                 try {
                     postCommentRepository.saveAll(entitiesToSave);
-                    long updateCount = entitiesToSave.stream()
-                            .filter(e -> existingById.containsKey(e.getCommentRefId()))
-                            .count();
-                    log.debug(
-                            "Persisted batch of {} comment entities ({} updates, {} inserts)",
-                            entitiesToSave.size(),
-                            updateCount,
-                            entitiesToSave.size() - updateCount);
+                    log.debug("Persisted batch of {} comment entities", entitiesToSave.size());
                 } catch (Exception e) {
                     log.error("Failed to persist batch of {} comment entities", entitiesToSave.size(), e);
                     throw e;

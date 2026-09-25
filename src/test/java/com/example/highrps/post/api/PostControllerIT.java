@@ -559,4 +559,65 @@ class PostControllerIT extends AbstractIntegrationTest {
         // 5. Assert the entity remains absent from Redis
         assertThat(postRedisRepository.existsById(postId)).isFalse();
     }
+
+    /**
+     * Verifies that a second post with the same title and author (but a different
+     * postId) is synchronously rejected with 409 Conflict due to the title-per-author
+     * Redis reservation added in Task 3.
+     */
+    @Test
+    @DisplayName("Should reject second post with same title and author even when postId differs")
+    void testShouldRejectDuplicateTitleForSameAuthor() {
+        String title = "My Unique Title";
+        String authorEmail = "title-author@example.com";
+        Long postId1 = IdGenerator.generateLong();
+        Long postId2 = IdGenerator.generateLong();
+
+        // First post – should succeed
+        mockMvcTester
+                .post()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .uri("/api/posts")
+                .content("""
+                        {
+                            "postId": %d,
+                            "title": "%s",
+                            "content": "First post content",
+                            "email": "%s",
+                            "published": false,
+                            "details": {
+                                "detailsKey": "key1",
+                                "createdBy": "user1"
+                            }
+                        }
+                        """.formatted(postId1, title, authorEmail))
+                .contentType(MediaType.APPLICATION_JSON)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.CREATED);
+
+        // Second post with different postId but same title + author – must be rejected
+        mockMvcTester
+                .post()
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .uri("/api/posts")
+                .content("""
+                        {
+                            "postId": %d,
+                            "title": "%s",
+                            "content": "Second post content",
+                            "email": "%s",
+                            "published": false,
+                            "details": {
+                                "detailsKey": "key2",
+                                "createdBy": "user2"
+                            }
+                        }
+                        """.formatted(postId2, title, authorEmail))
+                .contentType(MediaType.APPLICATION_JSON)
+                .exchange()
+                .assertThat()
+                .hasStatus(HttpStatus.CONFLICT)
+                .hasContentType(MediaType.APPLICATION_PROBLEM_JSON);
+    }
 }
