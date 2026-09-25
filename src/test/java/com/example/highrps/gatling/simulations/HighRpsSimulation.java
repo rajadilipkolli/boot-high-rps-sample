@@ -88,6 +88,12 @@ public class HighRpsSimulation extends Simulation {
                         .toArray(Assertion[]::new));
     }
 
+    /**
+     * Selects per-operation latency checks for profiles with stable latency expectations.
+     *
+     * @param profile the active load-test profile
+     * @return whether to check latency for each operation
+     */
     static boolean includePerOperationLatencyAssertions(String profile) {
         // smoke: too short to be stable; stress: intentionally breaches normal latency ceilings at 500-1000 RPS
         return !("smoke".equalsIgnoreCase(profile) || "stress".equalsIgnoreCase(profile));

@@ -17,6 +17,7 @@ class SchemaValidationTest {
     @Autowired
     private DataSource dataSource;
 
+    /** Verifies that the configured data source acquires connections lazily. */
     @Test
     void contextLoads() {
         assertThat(dataSource).isInstanceOf(LazyConnectionDataSourceProxy.class);
