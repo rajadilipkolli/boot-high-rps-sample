@@ -43,15 +43,21 @@ public class LoadTestConfig {
     public static final int DURATION_MINUTES = getProfileDurationMinutes();
     public static final int WARMUP_MINUTES = getProfileWarmupMinutes();
 
-    // Assertion thresholds
-    public static final double MAX_ERROR_RATE = getDoubleProperty("maxErrorRate", 1.0); // 1%
-    public static final int BASELINE_P95_MS = getIntProperty("baseline.p95", 50);
-    public static final int BASELINE_P99_MS = getIntProperty("baseline.p99", 100);
+    // Assertion thresholds — stress profile gets relaxed limits since it intentionally drives
+    // the system beyond its steady-state capacity (100→1000 RPS stepped ramp).
+    public static final double MAX_ERROR_RATE =
+            getDoubleProperty("maxErrorRate", "stress".equalsIgnoreCase(PROFILE) ? 5.0 : 1.0);
+    public static final int BASELINE_P95_MS =
+            getIntProperty("baseline.p95", "stress".equalsIgnoreCase(PROFILE) ? 5000 : 50);
+    public static final int BASELINE_P99_MS =
+            getIntProperty("baseline.p99", "stress".equalsIgnoreCase(PROFILE) ? 10000 : 100);
     public static final double BASELINE_THROUGHPUT = getDoubleProperty("baseline.throughput", TARGET_RPS * 0.9);
 
     // Allowed deltas
-    public static final int ALLOWED_P95_DELTA_PERCENT = getIntProperty("allowed.p95.delta.percent", 5);
-    public static final int ALLOWED_P99_DELTA_PERCENT = getIntProperty("allowed.p99.delta.percent", 10);
+    public static final int ALLOWED_P95_DELTA_PERCENT =
+            getIntProperty("allowed.p95.delta.percent", "stress".equalsIgnoreCase(PROFILE) ? 50 : 5);
+    public static final int ALLOWED_P99_DELTA_PERCENT =
+            getIntProperty("allowed.p99.delta.percent", "stress".equalsIgnoreCase(PROFILE) ? 50 : 10);
     public static final int ALLOWED_THROUGHPUT_DELTA_PERCENT = getIntProperty("allowed.throughput.delta.percent", 10);
 
     public static final String DATA_DIR = getProperty("dataDir", "target/loadtest-data");
@@ -189,7 +195,6 @@ public class LoadTestConfig {
         }
         return switch (PROFILE) {
             case "smoke" -> 100;
-            case "normal" -> 1000;
             case "high" -> 20000;
             case "stress" -> 25000;
             default -> 1000;
@@ -208,7 +213,6 @@ public class LoadTestConfig {
         }
         return switch (PROFILE) {
             case "smoke" -> 500;
-            case "normal" -> 5000;
             case "high", "stress" -> 50000;
             default -> 5000;
         };
