@@ -19,10 +19,11 @@ public interface PostRepository extends JpaRepository<PostEntity, Long> {
     List<PostEntity> findByPostRefIdIn(List<Long> postRefIds);
 
     /**
-     * Refetches posts by postRefId under a pessimistic write lock.
-     * Uses a native query with FOR NO KEY UPDATE to bypass a known Hibernate 6 bug
-     * where applying PESSIMISTIC_WRITE to an entity with an optional=false @MapsId association fails.
-     * Callers must sort {@code postRefIds} before passing them in to prevent deadlocks.
+     * Finds posts by external ID, ordered by that ID. Matching rows receive PostgreSQL
+     * {@code FOR NO KEY UPDATE} locks for the surrounding transaction.
+     *
+     * @param postRefIds external post IDs to match
+     * @return matching posts, or an empty list when none match
      */
     @Query(
             value = "SELECT * FROM posts WHERE post_ref_id IN :postRefIds ORDER BY post_ref_id FOR NO KEY UPDATE",

@@ -55,6 +55,13 @@ public class AuthorBatchProcessor implements EntityBatchProcessor {
         return "author";
     }
 
+    /**
+     * Applies the last payload for each email to its author row. Payloads with a deletion marker,
+     * invalid JSON, or no usable email are skipped. Update failures are caught after insertion is
+     * attempted, so a newly inserted row may remain. Database failures propagate and roll back the batch.
+     *
+     * @param payloads serialized author requests
+     */
     @Override
     public void processUpserts(List<String> payloads) {
         // ── Phase 1 (no transaction): parse payloads + tombstone filter ──────────

@@ -19,9 +19,11 @@ public interface AuthorRepository extends JpaRepository<AuthorEntity, Long> {
     List<AuthorEntity> findByEmailInAllIgnoreCase(@Param("emails") List<String> emails);
 
     /**
-     * Refetches authors by lower-cased email under a pessimistic write lock.
-     * Callers must sort {@code emails} before passing them in to guarantee
-     * consistent lock-acquisition order and prevent deadlocks.
+     * Finds authors whose lower-case emails match {@code emails}, ordered by lower-case email.
+     * Matching rows receive a pessimistic write lock for the surrounding transaction.
+     *
+     * @param emails lower-case email values to match
+     * @return matching authors, or an empty list when none match
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select a from AuthorEntity a where lower(a.email) in :emails order by lower(a.email)")

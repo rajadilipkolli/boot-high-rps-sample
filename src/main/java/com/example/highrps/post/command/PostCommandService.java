@@ -78,11 +78,13 @@ public class PostCommandService extends AbstractCommandService {
     }
 
     /**
-     * Creates a post and publishes its creation event.
+     * Attempts five-minute reservations for the author's title and the post ID, then publishes a creation event.
+     * A failed asynchronous publish completes the returned future exceptionally and releases both
+     * reservations when cleanup succeeds.
      *
      * @param cmd the post data to create
      * @return a future completed with the created post after the event is published
-     * @throws ResourceConflictException if the post ID is already reserved or is detected by the query service
+     * @throws ResourceConflictException if the title or ID reservation is held, or the query service finds the ID
      */
     public CompletableFuture<PostCommandResult> createPost(CreatePostCommand cmd) {
         log.info("Creating post with id: {}", cmd.postId());

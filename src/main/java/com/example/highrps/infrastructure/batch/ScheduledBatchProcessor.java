@@ -376,6 +376,13 @@ public class ScheduledBatchProcessor {
         }
     }
 
+    /**
+     * Retries each payload separately after a batch upsert fails. Failed payloads are sent to the
+     * dead-letter queue with a reason derived from the exception; only successful record IDs are
+     * returned for acknowledgement.
+     *
+     * @return record IDs whose individual upserts succeeded
+     */
     private List<String> processUpsertsIndividually(EntityBatchProcessor processor, List<PayloadOrTombstone> payloads) {
         String entityType = processor.getEntityType();
         List<String> ackIds = new ArrayList<>();
@@ -394,9 +401,13 @@ public class ScheduledBatchProcessor {
     }
 
     /**
-     * Walks the cause chain to decide whether the failure is a unique-constraint
-     * conflict (concurrent duplicate write) or a generic processing error.
-     * Does not alter retry count or acknowledgement order.
+     * Formats a dead-letter reason from the first recognized cause. A
+     * {@link UniqueConstraintConflictException} contributes its supplied constraint label and keys;
+     * any {@link DataIntegrityViolationException} is classified as a constraint conflict, using a
+     * quoted PostgreSQL constraint name when present or {@code unknown} otherwise. Other failures
+     * use the original exception message.
+     *
+     * @return a {@code unique_constraint_conflict} or {@code individual_upsert_failed} reason
      */
     static String resolveUpsertFailureReason(Throwable e) {
         Throwable current = e;

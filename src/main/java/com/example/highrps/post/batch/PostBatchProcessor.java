@@ -75,6 +75,15 @@ public class PostBatchProcessor implements EntityBatchProcessor {
         return "post";
     }
 
+    /**
+     * Applies the last payload for each post ID, creating or updating posts with an existing author.
+     * Payloads with a deletion marker, invalid JSON, or no post ID are skipped, as are posts whose
+     * authors cannot be found. Database and mapping failures propagate and roll back the batch.
+     *
+     * @param payloads serialized post requests
+     * @throws NumberFormatException if a post with an existing author has a nonnumeric ID
+     * @throws UniqueConstraintConflictException if a candidate post is absent after insertion and refetch
+     */
     @Override
     public void processUpserts(List<String> payloads) {
         // ── Phase 1 (no transaction): parse payloads + tombstone filter ──────────

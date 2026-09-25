@@ -35,8 +35,9 @@ public class UniqueConstraintConflictException extends RuntimeException {
      * Constructs a conflict exception.
      *
      * @param entityType     human-readable entity type label
-     * @param constraintName the DDL constraint / index name that was violated
-     * @param conflictingKeys the key(s) involved in the conflict
+     * @param constraintName the constraint label to report
+     * @param conflictingKeys the key values to report
+     * @throws NullPointerException if {@code conflictingKeys} or an element is {@code null}
      */
     public UniqueConstraintConflictException(String entityType, String constraintName, List<String> conflictingKeys) {
         super(buildMessage(entityType, constraintName, conflictingKeys));
@@ -49,9 +50,10 @@ public class UniqueConstraintConflictException extends RuntimeException {
      * Constructs a conflict exception with a cause.
      *
      * @param entityType     human-readable entity type label
-     * @param constraintName the DDL constraint / index name that was violated
-     * @param conflictingKeys the key(s) involved in the conflict
-     * @param cause          the underlying exception that triggered detection
+     * @param constraintName the constraint label to report
+     * @param conflictingKeys the key values to report
+     * @param cause          the cause to retain
+     * @throws NullPointerException if {@code conflictingKeys} or an element is {@code null}
      */
     public UniqueConstraintConflictException(
             String entityType, String constraintName, List<String> conflictingKeys, Throwable cause) {
@@ -72,20 +74,12 @@ public class UniqueConstraintConflictException extends RuntimeException {
         return entityType;
     }
 
-    /**
-     * The name of the violated DDL constraint or unique index.
-     *
-     * @return constraint name, never {@code null}
-     */
+    /** @return the supplied constraint label, which may be {@code null} */
     public String getConstraintName() {
         return constraintName;
     }
 
-    /**
-     * The key value(s) that produced the conflict.
-     *
-     * @return immutable list of conflicting key strings
-     */
+    /** @return an immutable copy of the supplied key values */
     public List<String> getConflictingKeys() {
         return conflictingKeys;
     }

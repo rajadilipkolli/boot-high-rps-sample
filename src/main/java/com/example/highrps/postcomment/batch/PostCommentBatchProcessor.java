@@ -58,6 +58,15 @@ public class PostCommentBatchProcessor implements EntityBatchProcessor {
         return "post-comment";
     }
 
+    /**
+     * Applies the last payload for each comment ID when its parent post exists.
+     * Payloads with a deletion marker, invalid JSON, missing IDs, or a missing parent are skipped.
+     * Update failures are caught after insertion is attempted, so a newly inserted row may remain.
+     * Database failures propagate and roll back the batch.
+     *
+     * @param payloads serialized comment results
+     * @throws UniqueConstraintConflictException if a candidate comment is absent after insertion and refetch
+     */
     @Override
     public void processUpserts(List<String> payloads) {
         // ── Phase 1 (no transaction): parse payloads + tombstone filter ──────────

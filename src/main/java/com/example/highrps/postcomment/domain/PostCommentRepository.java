@@ -25,9 +25,11 @@ public interface PostCommentRepository extends JpaRepository<PostCommentEntity, 
     List<PostCommentEntity> findByCommentRefIdIn(List<Long> commentRefIds);
 
     /**
-     * Refetches comments by commentRefId under a pessimistic write lock.
-     * Callers must sort {@code commentRefIds} before passing them in to guarantee
-     * consistent lock-acquisition order and prevent deadlocks.
+     * Finds comments by external ID, ordered by that ID. Matching rows receive a pessimistic
+     * write lock for the surrounding transaction.
+     *
+     * @param commentRefIds external comment IDs to match
+     * @return matching comments, or an empty list when none match
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT pc FROM PostCommentEntity pc WHERE pc.commentRefId IN :commentRefIds" + " ORDER BY pc.commentRefId")
