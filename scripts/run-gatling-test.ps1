@@ -45,9 +45,14 @@ docker compose -p boot-high-rps-sample -f docker/docker-compose.yml up -d
 # All other profiles start LGTM so traces/metrics are available in Grafana.
 if ($Profile -eq "stress") {
     Write-Host "Stress profile: starting exporters only (grafana-lgtm skipped to free CPU/RAM)..."
+    docker compose -p boot-high-rps-sample -f docker/docker-compose-monitoring.yml stop grafana-lgtm
     docker compose -p boot-high-rps-sample -f docker/docker-compose-monitoring.yml up -d
 } else {
     docker compose -p boot-high-rps-sample -f docker/docker-compose-monitoring.yml --profile monitoring up -d
+}
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Monitoring startup failed!"
+    exit 1
 }
 
 Write-Host "Building app..."
@@ -123,6 +128,10 @@ if ((Test-Path -LiteralPath $CompletionMarker -PathType Leaf) -and $RequiredFeed
 }
 
 $ExtraArgs = ""
+if ($Profile -eq "stress" -and $PSBoundParameters.ContainsKey("TargetRps")) {
+    Write-Host "TargetRps cannot be overridden for the stress profile."
+    exit 1
+}
 if ($TargetRps -gt 0) {
     $ExtraArgs += " -DtargetRps=$TargetRps"
 }
