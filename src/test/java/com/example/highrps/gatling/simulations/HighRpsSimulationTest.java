@@ -15,12 +15,12 @@ class HighRpsSimulationTest {
     }
 
     @Test
-    void omitsUnstablePerOperationLatencyAssertionsFromSmokeProfile() {
+    void omitsUnstablePerOperationLatencyAssertionsFromSmokeAndStressProfiles() {
         assertThat(HighRpsSimulation.includePerOperationLatencyAssertions("smoke"))
                 .isFalse();
         assertThat(HighRpsSimulation.includePerOperationLatencyAssertions("normal"))
                 .isTrue();
         assertThat(HighRpsSimulation.includePerOperationLatencyAssertions("stress"))
-                .isTrue();
+                .isFalse();
     }
 }
