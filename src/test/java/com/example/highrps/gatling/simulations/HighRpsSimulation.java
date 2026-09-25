@@ -25,8 +25,12 @@ import io.gatling.javaapi.http.HttpProtocolBuilder;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class HighRpsSimulation extends Simulation {
+
+    private static final Logger log = LoggerFactory.getLogger(HighRpsSimulation.class);
 
     HttpProtocolBuilder httpProtocol = http.baseUrl(LoadTestConfig.BASE_URL)
             .acceptHeader("application/json")
@@ -50,17 +54,17 @@ public class HighRpsSimulation extends Simulation {
      * Configures the selected load profile and its regression assertions.
      */
     public HighRpsSimulation() {
-        System.out.println("=== Effective Per-Operation Distribution ===");
-        System.out.println("Read Post: " + LoadTestConfig.READ_POST_WEIGHT + "%");
-        System.out.println("Read Comments: " + LoadTestConfig.READ_COMMENTS_WEIGHT + "%");
-        System.out.println("Read Tags: " + LoadTestConfig.READ_TAG_POSTS_WEIGHT + "%");
-        System.out.println("Create Comment: " + LoadTestConfig.CREATE_COMMENT_WEIGHT + "%");
-        System.out.println("Create Post: " + LoadTestConfig.CREATE_POST_WEIGHT + "%");
-        System.out.println("Register Author: " + LoadTestConfig.REGISTER_AUTHOR_WEIGHT + "%");
-        System.out.println("Update Post: " + LoadTestConfig.UPDATE_POST_WEIGHT + "%");
-        System.out.println("Delete Post: " + LoadTestConfig.DELETE_POST_WEIGHT + "%");
-        System.out.println("Update Comment: " + LoadTestConfig.UPDATE_COMMENT_WEIGHT + "%");
-        System.out.println("Delete Comment: " + LoadTestConfig.DELETE_COMMENT_WEIGHT + "%");
+        log.info("=== Effective Per-Operation Distribution ===");
+        log.info("Read Post: {}%", LoadTestConfig.READ_POST_WEIGHT);
+        log.info("Read Comments: {}%", LoadTestConfig.READ_COMMENTS_WEIGHT);
+        log.info("Read Tags: {}%", LoadTestConfig.READ_TAG_POSTS_WEIGHT);
+        log.info("Create Comment: {}%", LoadTestConfig.CREATE_COMMENT_WEIGHT);
+        log.info("Create Post: {}%", LoadTestConfig.CREATE_POST_WEIGHT);
+        log.info("Register Author: {}%", LoadTestConfig.REGISTER_AUTHOR_WEIGHT);
+        log.info("Update Post: {}%", LoadTestConfig.UPDATE_POST_WEIGHT);
+        log.info("Delete Post: {}%", LoadTestConfig.DELETE_POST_WEIGHT);
+        log.info("Update Comment: {}%", LoadTestConfig.UPDATE_COMMENT_WEIGHT);
+        log.info("Delete Comment: {}%", LoadTestConfig.DELETE_COMMENT_WEIGHT);
         double total = LoadTestConfig.READ_POST_WEIGHT
                 + LoadTestConfig.READ_COMMENTS_WEIGHT
                 + LoadTestConfig.READ_TAG_POSTS_WEIGHT
@@ -71,8 +75,8 @@ public class HighRpsSimulation extends Simulation {
                 + LoadTestConfig.DELETE_POST_WEIGHT
                 + LoadTestConfig.UPDATE_COMMENT_WEIGHT
                 + LoadTestConfig.DELETE_COMMENT_WEIGHT;
-        System.out.println("Total: " + total + "%");
-        System.out.println("============================================");
+        log.info("Total: {}%", total);
+        log.info("============================================");
 
         double targetRps = LoadTestConfig.TARGET_RPS;
         int durationMins = LoadTestConfig.DURATION_MINUTES;

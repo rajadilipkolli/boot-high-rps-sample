@@ -2,9 +2,11 @@ package com.example.highrps.postcomment.domain;
 
 import com.example.highrps.postcomment.domain.vo.PostCommentId;
 import com.example.highrps.shared.ResourceNotFoundException;
+import jakarta.persistence.LockModeType;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -21,6 +23,15 @@ public interface PostCommentRepository extends JpaRepository<PostCommentEntity, 
     List<PostCommentEntity> findByPostRefId(@Param("postId") Long postId);
 
     List<PostCommentEntity> findByCommentRefIdIn(List<Long> commentRefIds);
+
+    /**
+     * Refetches comments by commentRefId under a pessimistic write lock.
+     * Callers must sort {@code commentRefIds} before passing them in to guarantee
+     * consistent lock-acquisition order and prevent deadlocks.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT pc FROM PostCommentEntity pc WHERE pc.commentRefId IN :commentRefIds" + " ORDER BY pc.commentRefId")
+    List<PostCommentEntity> findByCommentRefIdInWithLock(@Param("commentRefIds") List<Long> commentRefIds);
 
     @Query("""
             SELECT pc FROM PostCommentEntity pc

@@ -3,6 +3,7 @@ package com.example.highrps.post.batch;
 import com.example.highrps.author.domain.AuthorEntity;
 import com.example.highrps.author.domain.AuthorRepository;
 import com.example.highrps.infrastructure.batch.EntityBatchProcessor;
+import com.example.highrps.infrastructure.batch.UniqueConstraintConflictException;
 import com.example.highrps.post.domain.PostEntity;
 import com.example.highrps.post.domain.PostRepository;
 import com.example.highrps.post.domain.TagEntity;
@@ -16,6 +17,7 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -24,8 +26,6 @@ import java.util.Objects;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-import org.hibernate.KeyType;
-import org.hibernate.Session;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
@@ -109,24 +109,10 @@ public class PostBatchProcessor implements EntityBatchProcessor {
             return;
         }
 
-        // ── Phase 2 (transaction): DB reads → tag upsert → saveAll ───────────────
+        // ── Phase 2 (transaction): tag upsert → native insert → locked refetch → saveAll ─
         // Transaction is opened here — only wraps actual DB I/O.
         transactionTemplate.executeWithoutResult(status -> {
-            // Step 2a: Bulk-fetch existing posts
-            List<Long> postIds = parsedPosts.stream()
-                    .map(parsedPost -> Long.valueOf(parsedPost.postId()))
-                    .toList();
-
-            List<PostEntity> existingPosts =
-                    entityManager.unwrap(Session.class).findMultiple(PostEntity.class, postIds, KeyType.NATURAL);
-
-            Map<Long, PostEntity> existingByPostId = existingPosts.stream()
-                    .filter(Objects::nonNull)
-                    .collect(Collectors.toMap(PostEntity::getPostRefId, Function.identity(), (e1, e2) -> e1));
-
-            int updateCount = existingByPostId.size();
-
-            // Step 2b: Bulk fetch authors
+            // Step 2a: Bulk fetch authors (preserve author lookup and the skip for a missing author)
             List<String> emails = parsedPosts.stream()
                     .map(p -> p.request().email())
                     .filter(Objects::nonNull)
@@ -138,7 +124,7 @@ public class PostBatchProcessor implements EntityBatchProcessor {
                     .collect(Collectors.toMap(
                             a -> a.getEmail().toLowerCase(Locale.ROOT), Function.identity(), (a, b) -> a));
 
-            // Step 2c: Bulk fetch + idempotent-insert tags
+            // Step 2b: Bulk fetch + idempotent-insert tags (preserve tag handling)
             Map<String, TagResponse> tagRequestsByName = parsedPosts.stream()
                     .flatMap(p -> {
                         var tags = p.request().tags();
@@ -192,57 +178,105 @@ public class PostBatchProcessor implements EntityBatchProcessor {
                 }
             }
 
-            // Step 2d: Assemble entities and save
-            List<PostEntity> entitiesToSave = parsedPosts.stream()
-                    .map(parsed -> {
-                        PostEntity entity = existingByPostId.get(Long.valueOf(parsed.postId()));
-                        if (entity != null) {
-                            // Update existing entity
-                            try {
-                                mapper.updatePostEntity(parsed.request(), entity, tagMap);
-                                log.debug("Updating existing post with postid: {}", parsed.postId());
-                            } catch (Exception e) {
-                                log.error("Failed to update post entity for postId: {}", parsed.postId(), e);
-                                throw new RuntimeException(
-                                        "Failed to update post entity for postId: " + parsed.postId(), e);
-                            }
-                        } else {
-                            // Create new entity
-                            try {
-                                entity = mapper.convert(parsed.request(), tagMap);
-                                String authorEmail = parsed.request().email();
-                                AuthorEntity author = null;
-                                if (authorEmail != null) {
-                                    author = authorByEmail.get(authorEmail.toLowerCase(Locale.ROOT));
-                                }
-                                if (author == null) {
-                                    log.warn(
-                                            "Author not found for email {}, rejecting post {}",
-                                            authorEmail,
-                                            parsed.postId());
-                                    return null; // Reject the corresponding post explicitly
-                                }
-                                entity.setAuthorEntity(author);
-                                log.debug("Creating new post with postRefId: {}", parsed.postId());
-                            } catch (Exception e) {
-                                log.error("Failed to create post entity for postId: {}", parsed.postId(), e);
-                                throw new RuntimeException(
-                                        "Failed to create post entity for postId: " + parsed.postId(), e);
-                            }
+            // Step 2c: Identify candidates: only those with a valid author get an insert attempt.
+            //          Skip (return null) for missing author, matching the existing behaviour.
+            List<ParsedPost> candidates = parsedPosts.stream()
+                    .filter(p -> {
+                        String authorEmail = p.request().email();
+                        if (authorEmail == null || !authorByEmail.containsKey(authorEmail.toLowerCase(Locale.ROOT))) {
+                            log.warn("Author not found for email {}, rejecting post {}", authorEmail, p.postId());
+                            return false;
                         }
-                        return entity;
+                        return true;
                     })
-                    .filter(Objects::nonNull)
                     .collect(Collectors.toList());
+
+            // Sort by postRefId to guarantee consistent lock-acquisition order.
+            candidates.sort(Comparator.comparing(p -> Long.valueOf(p.postId())));
+
+            List<Long> candidatePostIds =
+                    candidates.stream().map(p -> Long.valueOf(p.postId())).collect(Collectors.toList());
+
+            if (candidatePostIds.isEmpty()) {
+                return;
+            }
+
+            // Step 2d: Try to insert genuinely new rows into both posts and post_details.
+            //          We use a writable CTE to insert into posts and pass the generated ID to post_details.
+            String insertSql = "WITH ins_post AS ("
+                    + "  INSERT INTO posts (id, post_ref_id, title, content, published, published_at, author_id, version, created_at, modified_at) "
+                    + "  VALUES (nextval('posts_seq'), ?, ?, ?, ?, ?, (SELECT id FROM authors WHERE lower(email) = lower(?)), 0, now(), now()) "
+                    + "  ON CONFLICT (post_ref_id) DO NOTHING RETURNING id, created_at, modified_at"
+                    + ") "
+                    + "INSERT INTO post_details (id, details_key, created_by, version, created_at, modified_at) "
+                    + "SELECT id, ?, ?, 0, created_at, modified_at FROM ins_post";
+
+            jdbcTemplate.batchUpdate(insertSql, new BatchPreparedStatementSetter() {
+                @Override
+                public void setValues(PreparedStatement ps, int i) throws SQLException {
+                    ParsedPost p = candidates.get(i);
+                    NewPostRequest req = p.request();
+                    // Parameters for posts
+                    ps.setLong(1, Long.parseLong(p.postId()));
+                    ps.setString(2, req.title());
+                    ps.setString(3, req.content());
+                    ps.setBoolean(4, Boolean.TRUE.equals(req.published()));
+                    if (req.publishedAt() != null) {
+                        ps.setObject(5, req.publishedAt());
+                    } else {
+                        ps.setNull(5, java.sql.Types.TIMESTAMP);
+                    }
+                    ps.setString(6, req.email());
+                    // Parameters for post_details
+                    if (req.details() != null) {
+                        ps.setString(7, req.details().detailsKey());
+                        ps.setString(8, req.details().createdBy());
+                    } else {
+                        ps.setNull(7, java.sql.Types.VARCHAR);
+                        ps.setNull(8, java.sql.Types.VARCHAR);
+                    }
+                }
+
+                @Override
+                public int getBatchSize() {
+                    return candidates.size();
+                }
+            });
+
+            // Step 2e: Refetch under pessimistic write lock.
+            List<PostEntity> lockedPosts = postRepository.findByPostRefIdInWithLock(candidatePostIds);
+
+            Map<Long, PostEntity> lockedByPostId = lockedPosts.stream()
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toMap(PostEntity::getPostRefId, Function.identity(), (e1, e2) -> e1));
+
+            // Step 2f: Assemble entities — apply details + tag associations via JPA mapper.
+            List<PostEntity> entitiesToSave = new ArrayList<>();
+            for (ParsedPost parsed : candidates) {
+                Long postId = Long.valueOf(parsed.postId());
+                PostEntity entity = lockedByPostId.get(postId);
+
+                if (entity == null) {
+                    // A valid-author payload has no row after refetch → concurrent conflict.
+                    // Throw Phase-1 conflict exception so the scheduler can retry individually.
+                    throw new UniqueConstraintConflictException(
+                            "post", "uc_postentity_post_ref_id", List.of(parsed.postId()));
+                }
+
+                try {
+                    mapper.updatePostEntity(parsed.request(), entity, tagMap);
+                    log.debug("Upserting post with postRefId: {}", parsed.postId());
+                    entitiesToSave.add(entity);
+                } catch (Exception e) {
+                    log.error("Failed to update post entity for postId: {}", parsed.postId(), e);
+                    throw new RuntimeException("Failed to update post entity for postId: " + parsed.postId(), e);
+                }
+            }
 
             if (!entitiesToSave.isEmpty()) {
                 try {
                     postRepository.saveAll(entitiesToSave);
-                    log.debug(
-                            "Persisted batch of {} post entities ({} updates, {} inserts)",
-                            entitiesToSave.size(),
-                            updateCount,
-                            entitiesToSave.size() - updateCount);
+                    log.debug("Persisted batch of {} post entities", entitiesToSave.size());
                 } catch (Exception e) {
                     log.error("Failed to persist batch of {} post entities", entitiesToSave.size(), e);
                     throw e;

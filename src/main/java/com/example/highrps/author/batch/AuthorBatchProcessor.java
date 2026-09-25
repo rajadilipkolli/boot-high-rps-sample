@@ -6,6 +6,9 @@ import com.example.highrps.author.dto.AuthorRequest;
 import com.example.highrps.author.mapper.AuthorRequestToEntityMapper;
 import com.example.highrps.infrastructure.batch.EntityBatchProcessor;
 import com.example.highrps.shared.redis.DeletionMarkerHandler;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -14,6 +17,8 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.jdbc.core.BatchPreparedStatementSetter;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.json.JsonMapper;
@@ -28,18 +33,21 @@ public class AuthorBatchProcessor implements EntityBatchProcessor {
     private final JsonMapper jsonMapper;
     private final DeletionMarkerHandler deletionMarkerHandler;
     private final TransactionTemplate transactionTemplate;
+    private final JdbcTemplate jdbcTemplate;
 
     public AuthorBatchProcessor(
             AuthorRequestToEntityMapper mapper,
             AuthorRepository authorRepository,
             JsonMapper jsonMapper,
             DeletionMarkerHandler deletionMarkerHandler,
-            TransactionTemplate transactionTemplate) {
+            TransactionTemplate transactionTemplate,
+            JdbcTemplate jdbcTemplate) {
         this.mapper = mapper;
         this.authorRepository = authorRepository;
         this.jsonMapper = jsonMapper;
         this.deletionMarkerHandler = deletionMarkerHandler;
         this.transactionTemplate = transactionTemplate;
+        this.jdbcTemplate = jdbcTemplate;
     }
 
     @Override
@@ -81,60 +89,71 @@ public class AuthorBatchProcessor implements EntityBatchProcessor {
             return;
         }
 
-        // ── Phase 2 (transaction): DB reads + saveAll ────────────────────────────
-        // Transaction is opened here — only wraps actual DB I/O.
+        // ── Phase 2 (transaction): native insert + pessimistic refetch + saveAll ──
+        // Sort emails to guarantee consistent lock-acquisition order across
+        // concurrent transactions and prevent deadlocks.
+        List<String> sortedEmails =
+                parsedAuthors.stream().map(ParsedAuthor::email).sorted().collect(Collectors.toList());
+
         transactionTemplate.executeWithoutResult(status -> {
-            // Step 2a: Fetch existing authors
-            List<String> emails = parsedAuthors.stream()
-                    .map(ParsedAuthor::email)
-                    .filter(Objects::nonNull)
-                    .collect(Collectors.toList());
+            // Step 2a: Best-effort insert of genuinely new rows.
+            //          ON CONFLICT (email) DO NOTHING makes concurrent inserts safe.
+            String insertSql = "INSERT INTO authors "
+                    + "(id, first_name, middle_name, last_name, mobile, email, registered_at, version, created_at, modified_at)"
+                    + " VALUES (nextval('authors_seq'), ?, ?, ?, ?, ?, now(), 0, now(), now())"
+                    + " ON CONFLICT (email) DO NOTHING";
 
-            List<AuthorEntity> existingAuthors = authorRepository.findByEmailInAllIgnoreCase(emails);
+            jdbcTemplate.batchUpdate(insertSql, new BatchPreparedStatementSetter() {
+                @Override
+                public void setValues(PreparedStatement ps, int i) throws SQLException {
+                    ParsedAuthor pa = parsedAuthors.get(i);
+                    AuthorRequest req = pa.request();
+                    ps.setString(1, req.firstName());
+                    ps.setString(2, req.middleName());
+                    ps.setString(3, req.lastName());
+                    ps.setLong(4, req.mobile());
+                    ps.setString(5, req.email());
+                }
 
-            Map<String, AuthorEntity> existingByEmail = existingAuthors.stream()
+                @Override
+                public int getBatchSize() {
+                    return parsedAuthors.size();
+                }
+            });
+
+            // Step 2b: Refetch under pessimistic write lock to get all rows
+            // (both just-inserted and pre-existing) with exclusive locks.
+            List<AuthorEntity> lockedAuthors = authorRepository.findByEmailInAllIgnoreCaseWithLock(sortedEmails);
+
+            Map<String, AuthorEntity> existingByEmail = lockedAuthors.stream()
                     .collect(Collectors.toMap(
-                            a -> a.getEmail().toLowerCase(Locale.ROOT),
-                            Function.identity(),
-                            (a1, a2) -> a1)); // in case of duplicates, keep the first
+                            a -> a.getEmail().toLowerCase(Locale.ROOT), Function.identity(), (a1, a2) -> a1));
 
-            // Step 2b: Assemble entities
-            List<AuthorEntity> entitiesToSave = parsedAuthors.stream()
-                    .map(parsed -> {
-                        AuthorEntity entity = existingByEmail.get(parsed.email());
-                        if (entity != null) {
-                            // Update existing entity
-                            try {
-                                mapper.updateAuthorEntity(parsed.request(), entity);
-                                log.debug("Updating existing author with email: {}", parsed.email());
-                            } catch (Exception e) {
-                                log.warn("Failed to update author entity for email: {}", parsed.email(), e);
-                                return null;
-                            }
-                        } else {
-                            // Create new entity
-                            try {
-                                entity = mapper.convert(parsed.request());
-                                log.debug("Creating new author with email: {}", parsed.email());
-                            } catch (Exception e) {
-                                log.warn("Failed to create author entity for email: {}", parsed.email(), e);
-                                return null;
-                            }
-                        }
-                        return entity;
-                    })
-                    .filter(Objects::nonNull)
-                    .collect(Collectors.toList());
+            // Step 2c: Apply payload data through the JPA mapper and collect for saveAll.
+            List<AuthorEntity> entitiesToSave = new ArrayList<>();
+            for (ParsedAuthor parsed : parsedAuthors) {
+                AuthorEntity entity = existingByEmail.get(parsed.email());
+                if (entity == null) {
+                    // Row missing even after lock – should not happen given DO NOTHING,
+                    // but skip gracefully to preserve existing skip-on-failure behaviour.
+                    log.warn("Author row unexpectedly absent after insert for email: {}", parsed.email());
+                    continue;
+                }
+                try {
+                    mapper.updateAuthorEntity(parsed.request(), entity);
+                    entitiesToSave.add(entity);
+                    log.debug("Upserting author with email: {}", parsed.email());
+                } catch (Exception e) {
+                    log.warn("Failed to update author entity for email: {}", parsed.email(), e);
+                    // Preserve existing skip-for-mapping-failures behaviour.
+                }
+            }
 
-            // Step 2c: Save all (both new and updated)
+            // Step 2d: Save all (both new and updated)
             if (!entitiesToSave.isEmpty()) {
                 try {
                     authorRepository.saveAll(entitiesToSave);
-                    log.debug(
-                            "Persisted batch of {} author entities ({} updates, {} inserts)",
-                            entitiesToSave.size(),
-                            existingAuthors.size(),
-                            entitiesToSave.size() - existingAuthors.size());
+                    log.debug("Persisted batch of {} author entities", entitiesToSave.size());
                 } catch (Exception e) {
                     log.error("Failed to persist batch of {} author entities", entitiesToSave.size(), e);
                     throw e;

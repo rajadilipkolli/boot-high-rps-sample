@@ -87,10 +87,27 @@ public class PostCommandService extends AbstractCommandService {
     public CompletableFuture<PostCommandResult> createPost(CreatePostCommand cmd) {
         log.info("Creating post with id: {}", cmd.postId());
 
+        // Reserve the title-per-author slot first so most duplicate-title requests
+        // return a synchronous 409 before any DB interaction.
+        String titleReservationKey = "reservation:post:author:" + cmd.authorEmail() + ":title:" + cmd.title();
+        Boolean titleAcquired =
+                redisTemplate.opsForValue().setIfAbsent(titleReservationKey, "1", Duration.ofMinutes(5));
+
+        if (Boolean.FALSE.equals(titleAcquired)) {
+            throw new ResourceConflictException(
+                    "Post already exists with title: " + cmd.title() + " for author: " + cmd.authorEmail());
+        }
+
         String reservationKey = "reservation:post:" + cmd.postId();
         Boolean acquired = redisTemplate.opsForValue().setIfAbsent(reservationKey, "1", Duration.ofMinutes(5));
 
         if (Boolean.FALSE.equals(acquired)) {
+            // Release the title reservation so the slot is not permanently blocked.
+            try {
+                redisTemplate.delete(titleReservationKey);
+            } catch (Exception e) {
+                log.warn("Failed to clean up title reservation key: {}", titleReservationKey, e);
+            }
             throw new ResourceConflictException("Post already exists with id: " + cmd.postId());
         }
 
@@ -163,6 +180,14 @@ public class PostCommandService extends AbstractCommandService {
                         } catch (Exception e) {
                             log.warn(
                                     "Failed to clean up reservation key after creation failure: {}", reservationKey, e);
+                        }
+                        try {
+                            redisTemplate.delete(titleReservationKey);
+                        } catch (Exception e) {
+                            log.warn(
+                                    "Failed to clean up title reservation key after creation failure: {}",
+                                    titleReservationKey,
+                                    e);
                         }
                     }
                 });

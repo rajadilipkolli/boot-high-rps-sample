@@ -1,9 +1,11 @@
 package com.example.highrps.author.domain;
 
 import com.example.highrps.shared.ResourceNotFoundException;
+import jakarta.persistence.LockModeType;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -15,6 +17,15 @@ public interface AuthorRepository extends JpaRepository<AuthorEntity, Long> {
 
     @Query("select a from AuthorEntity a where lower(a.email) in :emails")
     List<AuthorEntity> findByEmailInAllIgnoreCase(@Param("emails") List<String> emails);
+
+    /**
+     * Refetches authors by lower-cased email under a pessimistic write lock.
+     * Callers must sort {@code emails} before passing them in to guarantee
+     * consistent lock-acquisition order and prevent deadlocks.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select a from AuthorEntity a where lower(a.email) in :emails order by lower(a.email)")
+    List<AuthorEntity> findByEmailInAllIgnoreCaseWithLock(@Param("emails") List<String> emails);
 
     @Transactional
     @Modifying(clearAutomatically = true)

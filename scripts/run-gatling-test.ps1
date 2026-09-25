@@ -1,7 +1,8 @@
 param(
     [string]$Profile = "smoke",
     [int]$DurationMinutes = 1,
-    [int]$WarmupMinutes = 1
+    [int]$WarmupMinutes = 1,
+    [double]$TargetRps = 0
 )
 
 $DataDirectory = "target/loadtest-data"
@@ -38,7 +39,16 @@ Stop-Process -Name java -ErrorAction SilentlyContinue
 Write-Host "Starting infrastructure..."
 docker compose -p boot-high-rps-sample -f docker/docker-compose-sentinel.yml up -d
 docker compose -p boot-high-rps-sample -f docker/docker-compose.yml up -d
-docker compose -p boot-high-rps-sample -f docker/docker-compose-monitoring.yml up -d
+
+# Skip grafana-lgtm for stress profile — at 1000 RPS it consumes ~138% CPU and 3 GB RAM
+# on the same host, competing with the app and inflating latency.
+# All other profiles start LGTM so traces/metrics are available in Grafana.
+if ($Profile -eq "stress") {
+    Write-Host "Stress profile: starting exporters only (grafana-lgtm skipped to free CPU/RAM)..."
+    docker compose -p boot-high-rps-sample -f docker/docker-compose-monitoring.yml up -d
+} else {
+    docker compose -p boot-high-rps-sample -f docker/docker-compose-monitoring.yml --profile monitoring up -d
+}
 
 Write-Host "Building app..."
 if ($env:OS -eq 'Windows_NT') {
@@ -112,11 +122,16 @@ if ((Test-Path -LiteralPath $CompletionMarker -PathType Leaf) -and $RequiredFeed
     New-Item -ItemType File -Path $CompletionMarker -Force | Out-Null
 }
 
+$ExtraArgs = ""
+if ($TargetRps -gt 0) {
+    $ExtraArgs += " -DtargetRps=$TargetRps"
+}
+
 Write-Host "Running Gatling with Profile: $Profile..."
 if ($env:OS -eq 'Windows_NT') {
-    cmd /c "mvnw.cmd gatling:test -Dprofile=$Profile -DdurationMinutes=$DurationMinutes -DwarmupMinutes=$WarmupMinutes"
+    cmd /c "mvnw.cmd gatling:test -Dprofile=$Profile -DdurationMinutes=$DurationMinutes -DwarmupMinutes=$WarmupMinutes $ExtraArgs"
 } else {
-    sh -c "./mvnw gatling:test -Dprofile=$Profile -DdurationMinutes=$DurationMinutes -DwarmupMinutes=$WarmupMinutes"
+    sh -c "./mvnw gatling:test -Dprofile=$Profile -DdurationMinutes=$DurationMinutes -DwarmupMinutes=$WarmupMinutes $ExtraArgs"
 }
 $GatlingExitCode = $LASTEXITCODE
 
