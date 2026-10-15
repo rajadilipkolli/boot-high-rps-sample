@@ -1,6 +1,5 @@
 package com.example.highrps;
 
-import com.example.highrps.infrastructure.hints.ProtobufRuntimeHints;
 import com.example.highrps.shared.config.AppProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;

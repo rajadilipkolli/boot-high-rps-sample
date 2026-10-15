@@ -1,4 +1,4 @@
-package com.example.highrps.infrastructure.hints;
+package com.example.highrps;
 
 import com.example.highrps.author.command.AuthorCommandResult;
 import com.example.highrps.author.command.CreateAuthorCommand;
