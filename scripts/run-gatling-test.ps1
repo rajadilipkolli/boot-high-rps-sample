@@ -42,8 +42,8 @@ function Test-RequiredFeederFiles {
 }
 
 if (-not $env:JAVA_HOME -or -not (Test-Path $env:JAVA_HOME)) {
-    if (Test-Path "C:\Users\1039060\.jdks\graalvm-ce-25.0.2") {
-        $env:JAVA_HOME = "C:\Users\1039060\.jdks\graalvm-ce-25.0.2"
+    if ($env:GRAALVM_HOME -and (Test-Path $env:GRAALVM_HOME)) {
+        $env:JAVA_HOME = $env:GRAALVM_HOME
     }
 }
 
@@ -187,6 +187,10 @@ if ((Test-Path -LiteralPath $CompletionMarker -PathType Leaf) -and $RequiredFeed
             cmd /c "mvnw.cmd test-compile -DskipTests -Dspotless.check.skip=true -Djacoco.skip=true"
         } else {
             sh -c "./mvnw test-compile -DskipTests -Dspotless.check.skip=true -Djacoco.skip=true"
+        }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Data Generator test compilation failed!"
+            exit 1
         }
     }
     if ($env:OS -eq 'Windows_NT') {
