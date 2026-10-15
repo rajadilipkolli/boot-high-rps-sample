@@ -53,7 +53,11 @@ DEFAULT_INTERVAL_SECONDS = 5
 
 
 def docker_exec_redis(args: list[str]) -> str | None:
-    """Run a redis-cli command in the redis-master container and return stdout."""
+    """Run redis-cli arguments in redis-master and return stripped stdout.
+
+    Return None on a nonzero exit, a 10-second subprocess timeout, or another
+    subprocess exception. Redis error text on a zero exit is returned as-is.
+    """
     cmd = ["docker", "exec", REDIS_MASTER_CONTAINER, "redis-cli"] + args
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
@@ -67,7 +71,11 @@ def docker_exec_redis(args: list[str]) -> str | None:
 
 
 def docker_exec_psql(sql: str) -> str | None:
-    """Run a psql query in the postgresql container and return stdout."""
+    """Run SQL in postgresql's statsdb as appuser and return stripped stdout.
+
+    Return None on a nonzero exit, a 10-second subprocess timeout, or another
+    subprocess exception.
+    """
     cmd = [
         "docker", "exec", POSTGRES_CONTAINER,
         "psql", "-U", "appuser", "-d", "statsdb",
@@ -145,7 +153,10 @@ def get_group_info() -> dict | None:
 
 
 def get_table_row_counts() -> dict:
-    """Return row counts for the main business tables (authors, posts, comments)."""
+    """Return counts keyed by authors, posts, and post_comments.
+
+    A table's value is None when its query fails or its output is not an integer.
+    """
     tables = {
         "authors": "SELECT COUNT(*) FROM authors",
         "posts": "SELECT COUNT(*) FROM posts",
@@ -165,7 +176,12 @@ def get_table_row_counts() -> dict:
 
 
 def cmd_snapshot(args: argparse.Namespace) -> int:
-    """Record DLQ length before Gatling."""
+    """Write the current DLQ length and a UTC timestamp to args.out as JSON.
+
+    Create parent directories and overwrite the output file. Return 0 on success,
+    or 1 without writing if the DLQ length cannot be read. File-system errors
+    propagate to the caller.
+    """
     dlq_len = get_dlq_len()
     if dlq_len is None:
         print("ERROR: Could not read DLQ length.", file=sys.stderr)
@@ -184,7 +200,22 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
 
 
 def cmd_wait(args: argparse.Namespace) -> int:
-    """Wait for drain completion after Gatling, then record results."""
+    """Poll for zero group lag and pending counts, then write JSON to args.out.
+
+    args.timeout and args.interval are seconds; a nonpositive timeout skips
+    polling. Subprocess calls and sleeps can extend the wait beyond the timeout.
+    args.snapshot optionally names a JSON object with a numeric dlq_before value;
+    a nonexistent snapshot is ignored.
+
+    Create output directories and overwrite the results file with drain status,
+    elapsed seconds, DLQ counts and delta, row counts, and a UTC timestamp, even
+    when draining times out. Unavailable diagnostics are None. Return 0 only if
+    zero lag and pending were observed, otherwise 1; DLQ growth and unavailable
+    diagnostics do not affect this status.
+
+    File-system, JSON-decoding, and invalid snapshot value errors propagate.
+    A negative interval raises ValueError if polling reaches a sleep.
+    """
     # Load snapshot for DLQ-before baseline
     dlq_before = None
     if args.snapshot and os.path.isfile(args.snapshot):
@@ -254,6 +285,11 @@ def cmd_wait(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    """Parse command-line arguments and return the snapshot or wait status.
+
+    Argument parsing may raise SystemExit for help or invalid arguments;
+    exceptions from the selected command propagate to the caller.
+    """
     ap = argparse.ArgumentParser(description="Drain-check utility for boot-high-rps-sample")
     sub = ap.add_subparsers(dest="command", required=True)
 

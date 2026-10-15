@@ -63,11 +63,22 @@ public class PostRedis implements Serializable {
         return content;
     }
 
+    /**
+     * Sets the publication flag without changing the publication timestamp.
+     *
+     * @param published the flag to store; {@code null} is read as unpublished by {@link #isPublished()}
+     * @return this instance
+     */
     public PostRedis setPublished(Boolean published) {
         this.published = published;
         return this;
     }
 
+    /**
+     * Returns whether the stored publication flag is true, treating {@code null} as false.
+     *
+     * @return true only when the stored flag is {@link Boolean#TRUE}
+     */
     public boolean isPublished() {
         return Boolean.TRUE.equals(published);
     }

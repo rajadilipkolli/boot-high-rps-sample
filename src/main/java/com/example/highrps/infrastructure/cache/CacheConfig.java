@@ -74,6 +74,11 @@ public class CacheConfig {
         return clientConfigurationBuilder -> clientConfigurationBuilder.readFrom(ReadFrom.REPLICA_PREFERRED);
     }
 
+    /**
+     * Creates Redis reading conversions for byte-array, integer, and long boolean representations.
+     *
+     * @return the custom conversions used when reading Redis entities
+     */
     @Bean
     RedisCustomConversions redisCustomConversions() {
         return new RedisCustomConversions(List.of(
@@ -84,6 +89,12 @@ public class CacheConfig {
     enum BytesToBooleanConverter implements Converter<byte[], Boolean> {
         INSTANCE;
 
+        /**
+         * Interprets UTF-8 bytes as true only for {@code "1"} or case-insensitive {@code "true"}.
+         *
+         * @param source the encoded flag; whitespace is not trimmed
+         * @return false for null, empty, or any other input
+         */
         @Override
         public Boolean convert(byte[] source) {
             if (source == null || source.length == 0) {
@@ -98,6 +109,12 @@ public class CacheConfig {
     enum IntegerToBooleanConverter implements Converter<Integer, Boolean> {
         INSTANCE;
 
+        /**
+         * Interprets any nonzero value, including a negative value, as true.
+         *
+         * @param source the numeric flag
+         * @return false for null or zero, otherwise true
+         */
         @Override
         public Boolean convert(Integer source) {
             return source != null && source != 0;
@@ -108,6 +125,12 @@ public class CacheConfig {
     enum LongToBooleanConverter implements Converter<Long, Boolean> {
         INSTANCE;
 
+        /**
+         * Interprets any nonzero value, including a negative value, as true.
+         *
+         * @param source the numeric flag
+         * @return false for null or zero, otherwise true
+         */
         @Override
         public Boolean convert(Long source) {
             return source != null && source != 0L;

@@ -42,6 +42,13 @@ import org.springframework.aot.hint.TypeReference;
 
 public class ProtobufRuntimeHints implements RuntimeHintsRegistrar {
 
+    /**
+     * Adds reflection hints for Protobuf registries, Caffeine cache implementations, and application
+     * data binding in native images.
+     *
+     * @param hints the registry to update
+     * @param classLoader unused by this registrar
+     */
     @Override
     public void registerHints(RuntimeHints hints, ClassLoader classLoader) {
         hints.reflection()
