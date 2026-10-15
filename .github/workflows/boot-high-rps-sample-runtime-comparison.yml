@@ -8,7 +8,7 @@ name: boot-high-rps-sample-runtime-comparison
 #   - Is dispatch-only (no push/schedule trigger).
 #   - Requests only contents: read — it NEVER writes to docs/baselines/.
 #   - Runs both runtimes sequentially on one runner in the selected order.
-#   - Fails only for build, readiness, or drain-check failures.
+#   - Fails for runner, infrastructure, readiness, or drain-check failures.
 #   - Does NOT fail for expected Gatling assertion failures under stress.
 
 on:
@@ -244,19 +244,19 @@ jobs:
             DFILE="results/$rt/run-metrics/drain-results-$rt.json"
             if [[ -f "$DFILE" ]]; then
               python3 -c "
-import json, sys
-d = json.load(open(sys.argv[1]))
-rc = d.get('row_counts', {}) or {}
-print('| %s | %s | %s | %s | %s | %s | %s |' % (
-  sys.argv[2],
-  d.get('drain_success', 'N/A'),
-  d.get('drain_time_sec', 'N/A'),
-  d.get('dlq_delta', 'N/A'),
-  rc.get('authors', 'N/A'),
-  rc.get('posts', 'N/A'),
-  rc.get('post_comments', 'N/A'),
-))
-" "$DFILE" "$rt" >> "$GITHUB_STEP_SUMMARY"
+          import json, sys
+          d = json.load(open(sys.argv[1]))
+          rc = d.get('row_counts', {}) or {}
+          print('| %s | %s | %s | %s | %s | %s | %s |' % (
+            sys.argv[2],
+            d.get('drain_success', 'N/A'),
+            d.get('drain_time_sec', 'N/A'),
+            d.get('dlq_delta', 'N/A'),
+            rc.get('authors', 'N/A'),
+            rc.get('posts', 'N/A'),
+            rc.get('post_comments', 'N/A'),
+          ))
+          " "$DFILE" "$rt" >> "$GITHUB_STEP_SUMMARY"
             else
               echo "| $rt | N/A | N/A | N/A | N/A | N/A | N/A |" >> "$GITHUB_STEP_SUMMARY"
             fi
@@ -306,7 +306,7 @@ print('| %s | %s | %s | %s | %s | %s | %s |' % (
 
       # ══════════════════════════════════════════════════════════════════════
       # FAILURE GATE
-      # Fail only for build failure, readiness failure, or drain-check failure.
+      # Fail for runner, infrastructure, readiness, or drain-check failures.
       # Expected Gatling assertion failures under stress are non-fatal.
       # ══════════════════════════════════════════════════════════════════════
       - name: Check failure gates
@@ -314,15 +314,30 @@ print('| %s | %s | %s | %s | %s | %s | %s |' % (
         run: |
           FAILED=0
 
-          # Drain failure for either runtime is a hard failure
+          # Runner and drain failures for either runtime are hard failures
           for rt in jvm native; do
+            EXIT_VAR="EXIT_$rt"
+            RUN_EXIT="${!EXIT_VAR:-missing}"
+            GATLING_LOG="results/$rt/run-metrics/gatling-$rt.log"
+            # Maven exits 1 for both assertion failures and execution failures.
+            # Only the Gatling plugin's explicit assertion failure is permitted.
+            if [[ "$RUN_EXIT" != "0" ]]; then
+              if [[ "$RUN_EXIT" != "1" ]] || ! grep -Eq 'Gatling simulation assertions failed *!' "$GATLING_LOG"; then
+                echo "::error::Runner FAILED for $rt runtime (exit $RUN_EXIT)"
+                FAILED=1
+              fi
+            fi
+
             DFILE="results/$rt/run-metrics/drain-results-$rt.json"
             if [[ -f "$DFILE" ]]; then
-              SUCCESS=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('drain_success', False))" "$DFILE" 2>/dev/null || echo "False")
+              SUCCESS=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('drain_success') is True and type(d.get('dlq_delta')) is int and d['dlq_delta'] == 0)" "$DFILE" 2>/dev/null || echo "False")
               if [[ "$SUCCESS" != "True" ]]; then
                 echo "::error::Drain check FAILED for $rt runtime"
                 FAILED=1
               fi
+            else
+              echo "::error::Drain results missing for $rt runtime: $DFILE"
+              FAILED=1
             fi
           done
 

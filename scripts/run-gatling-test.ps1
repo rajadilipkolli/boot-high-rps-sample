@@ -81,7 +81,7 @@ Stop-Process -Name java -ErrorAction SilentlyContinue
 
 Write-Host "Starting infrastructure..."
 docker compose -p boot-high-rps-sample -f docker/docker-compose-sentinel.yml up -d
-docker compose -p boot-high-rps-sample -f docker/docker-compose.yml up -d
+docker compose -p boot-high-rps-sample -f docker/docker-compose.yml up -d postgresqldb
 
 # Skip grafana-lgtm for stress profile — at 1000 RPS it consumes ~138% CPU and 3 GB RAM
 # on the same host, competing with the app and inflating latency.
@@ -232,11 +232,12 @@ if ($TargetRps -gt 0) {
     $ExtraArgs += " -DtargetRps=$TargetRps"
 }
 
+$GatlingLog = Join-Path $MetricsDir "gatling-$Runtime.log"
 Write-Host "Running Gatling with Profile: $Profile..."
 if ($env:OS -eq 'Windows_NT') {
-    cmd /c "mvnw.cmd gatling:test -Dprofile=$Profile -DdurationMinutes=$DurationMinutes -DwarmupMinutes=$WarmupMinutes $ExtraArgs"
+    cmd /c "mvnw.cmd gatling:test -Dprofile=$Profile -DdurationMinutes=$DurationMinutes -DwarmupMinutes=$WarmupMinutes $ExtraArgs" 2>&1 | Tee-Object -FilePath $GatlingLog
 } else {
-    sh -c "./mvnw gatling:test -Dprofile=$Profile -DdurationMinutes=$DurationMinutes -DwarmupMinutes=$WarmupMinutes $ExtraArgs"
+    sh -c "./mvnw gatling:test -Dprofile=$Profile -DdurationMinutes=$DurationMinutes -DwarmupMinutes=$WarmupMinutes $ExtraArgs" 2>&1 | Tee-Object -FilePath $GatlingLog
 }
 $GatlingExitCode = $LASTEXITCODE
 
