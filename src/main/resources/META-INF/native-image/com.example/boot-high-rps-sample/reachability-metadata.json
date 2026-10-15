@@ -365,6 +365,102 @@
       "allDeclaredMethods": true,
       "allDeclaredFields": true,
       "serializable": true
+    },
+    {
+      "condition": {"typeReached": "com.example.highrps.shared.ResourceConflictException"},
+      "type": "com.example.highrps.shared.ResourceConflictException",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "serializable": true
+    },
+    {
+      "condition": {"typeReached": "io.hypersistence.utils.hibernate.type.json.JsonType"},
+      "type": "io.hypersistence.utils.hibernate.type.json.JsonType",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true
+    },
+    {
+      "condition": {"typeReached": "io.hypersistence.utils.hibernate.type.json.JsonBinaryType"},
+      "type": "io.hypersistence.utils.hibernate.type.json.JsonBinaryType",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true
+    },
+    {
+      "condition": {"typeReached": "io.hypersistence.utils.hibernate.type.json.JsonStringType"},
+      "type": "io.hypersistence.utils.hibernate.type.json.JsonStringType",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true
+    },
+    {
+      "condition": {"typeReached": "io.hypersistence.utils.hibernate.type.util.ObjectMapperWrapper"},
+      "type": "io.hypersistence.utils.hibernate.type.util.ObjectMapperWrapper",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true
+    },
+    {
+      "condition": {"typeReached": "org.springdoc.core.configuration.SpringDocConfiguration"},
+      "type": "org.springdoc.core.configuration.SpringDocConfiguration",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true
+    },
+    {
+      "condition": {"typeReached": "org.springdoc.webmvc.ui.SwaggerUiWebMvcConfigurer"},
+      "type": "org.springdoc.webmvc.ui.SwaggerUiWebMvcConfigurer",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true
+    },
+    {
+      "condition": {"typeReached": "org.springdoc.webmvc.core.configuration.SpringDocWebMvcConfiguration"},
+      "type": "org.springdoc.webmvc.core.configuration.SpringDocWebMvcConfiguration",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true
+    },
+    {
+      "condition": {"typeReached": "io.swagger.v3.oas.models.OpenAPI"},
+      "type": "io.swagger.v3.oas.models.OpenAPI",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true
+    },
+    {
+      "type": "com.google.protobuf.ExtensionRegistry",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "methods": [
+        {
+          "name": "getEmptyRegistry",
+          "parameterTypes": []
+        },
+        {
+          "name": "newInstance",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "com.google.protobuf.ExtensionRegistryLite",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "methods": [
+        {
+          "name": "getEmptyRegistry",
+          "parameterTypes": []
+        },
+        {
+          "name": "newInstance",
+          "parameterTypes": []
+        }
+      ]
     }
   ],
   "resources": [
@@ -372,6 +468,7 @@
     {"glob": "application*.yml"},
     {"glob": "application*.yaml"},
     {"glob": "logback-spring.xml"},
-    {"glob": "log4j2-spring.xml"}
+    {"glob": "log4j2-spring.xml"},
+    {"glob": "db/migration/**"}
   ]
 }
