@@ -39,7 +39,10 @@ public class CacheConfig {
     Cache localCache(AppProperties appProperties) {
         return Caffeine.newBuilder()
                 .maximumSize(appProperties.getCache().getLocalMaxSize())
-                .expireAfterWrite(Duration.ofMinutes(5))
+                // 30 s TTL: short enough that cross-node stale reads resolve quickly
+                // (write on node-1 invalidates that node's entry; node-2 falls through
+                // to Redis within 30 s at most), while still absorbing hot repeated reads.
+                .expireAfterWrite(Duration.ofSeconds(30))
                 .executor(Executors.newVirtualThreadPerTaskExecutor())
                 .recordStats()
                 .removalListener((key, value, cause) -> {
@@ -97,7 +100,7 @@ public class CacheConfig {
          */
         @Override
         public Boolean convert(byte[] source) {
-            if (source == null || source.length == 0) {
+            if (source.length == 0) {
                 return Boolean.FALSE;
             }
             String s = new String(source, StandardCharsets.UTF_8);
@@ -117,7 +120,7 @@ public class CacheConfig {
          */
         @Override
         public Boolean convert(Integer source) {
-            return source != null && source != 0;
+            return source != 0;
         }
     }
 
@@ -133,7 +136,7 @@ public class CacheConfig {
          */
         @Override
         public Boolean convert(Long source) {
-            return source != null && source != 0L;
+            return source != 0L;
         }
     }
 }

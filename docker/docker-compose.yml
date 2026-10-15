@@ -78,6 +78,14 @@ services:
     extra_hosts: [ 'host.docker.internal:host-gateway' ]
     depends_on:
       - postgresqldb
+    healthcheck:
+      # Hits the Spring Boot actuator health endpoint on the container's own port.
+      # Each scaled replica is checked independently by Docker.
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     networks:
       - demo-network
 

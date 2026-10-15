@@ -2,6 +2,8 @@ FROM eclipse-temurin:25.0.4_7-jre-jammy
 ARG JAR_FILE=target/boot-high-rps-sample-0.1.0-SNAPSHOT.jar
 COPY ${JAR_FILE} app.jar
 
+ENV SPRING_PROFILES_ACTIVE=production
+
 # Run as non-root user
 RUN addgroup --system spring && adduser --system --ingroup spring spring
 RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
@@ -15,6 +17,7 @@ ENTRYPOINT ["java", \
     "-Xmx2g", \
     "-XX:+UseCompressedOops", \
     "-XX:MaxDirectMemorySize=512m", \
+    "-Dspring.profiles.active=production", \
     "-jar", \
     "/app.jar"]
 
