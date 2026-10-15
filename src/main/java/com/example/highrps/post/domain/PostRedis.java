@@ -21,7 +21,7 @@ public class PostRedis implements Serializable {
     private String title;
 
     private String content;
-    private boolean published;
+    private Boolean published = Boolean.FALSE;
     private LocalDateTime publishedAt;
 
     @Indexed
@@ -63,13 +63,24 @@ public class PostRedis implements Serializable {
         return content;
     }
 
-    public PostRedis setPublished(boolean published) {
+    /**
+     * Sets the publication flag without changing the publication timestamp.
+     *
+     * @param published the flag to store; {@code null} is read as unpublished by {@link #isPublished()}
+     * @return this instance
+     */
+    public PostRedis setPublished(Boolean published) {
         this.published = published;
         return this;
     }
 
+    /**
+     * Returns whether the stored publication flag is true, treating {@code null} as false.
+     *
+     * @return true only when the stored flag is {@link Boolean#TRUE}
+     */
     public boolean isPublished() {
-        return published;
+        return Boolean.TRUE.equals(published);
     }
 
     public PostRedis setPublishedAt(LocalDateTime publishedAt) {

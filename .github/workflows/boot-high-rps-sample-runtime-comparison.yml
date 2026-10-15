@@ -1,0 +1,344 @@
+name: boot-high-rps-sample-runtime-comparison
+
+# Investigation workflow: compare JVM vs GraalVM native throughput on a single runner.
+# Criteria, validity conditions, and improvement thresholds are defined in
+# docs/LOAD_TESTING.md under "JVM vs Native Comparison".
+#
+# This workflow:
+#   - Is dispatch-only (no push/schedule trigger).
+#   - Requests only contents: read — it NEVER writes to docs/baselines/.
+#   - Runs both runtimes sequentially on one runner in the selected order.
+#   - Fails for runner, infrastructure, readiness, or drain-check failures.
+#   - Does NOT fail for expected Gatling assertion failures under stress.
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'Load profile (smoke, normal, high, stress)'
+        required: false
+        default: 'stress'
+      durationMinutes:
+        description: 'Duration in minutes for each runtime'
+        required: false
+        default: '15'
+      warmupMinutes:
+        description: 'Warm-up minutes applied identically to both runtimes (non-zero)'
+        required: false
+        default: '3'
+      order:
+        description: 'Run order (jvm-first or native-first)'
+        required: false
+        default: 'jvm-first'
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-comparison:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150   # Sufficient for two full runs (2 × ~60 min) plus overhead
+
+    env:
+      # Validated profile and runtime order — set in Setup step
+      PROFILE: ''
+      DURATION: ''
+      WARMUP: ''
+      ORDER: ''
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK
+        uses: actions/setup-java@v6
+        with:
+          java-version: 25.0.4+101.0.LTS
+          distribution: temurin
+          cache: maven
+        # NOTE: GraalVM native toolchain stays inside the Dockerfile.native builder
+        # stage. The host JDK is only needed for JVM packaging and Gatling.
+
+      - name: Validate inputs
+        id: config
+        run: |
+          PROFILE_INPUT="${{ github.event.inputs.profile || 'stress' }}"
+          DURATION_INPUT="${{ github.event.inputs.durationMinutes || '15' }}"
+          WARMUP_INPUT="${{ github.event.inputs.warmupMinutes || '3' }}"
+          ORDER_INPUT="${{ github.event.inputs.order || 'jvm-first' }}"
+
+          case "$PROFILE_INPUT" in
+            smoke|normal|high|stress) ;;
+            *) echo "::error::profile must be one of: smoke, normal, high, stress"; exit 1 ;;
+          esac
+
+          if [[ ! "$DURATION_INPUT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::durationMinutes must be a positive integer"; exit 1
+          fi
+
+          if [[ ! "$WARMUP_INPUT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::warmupMinutes must be a positive non-zero integer"; exit 1
+          fi
+
+          case "$ORDER_INPUT" in
+            jvm-first|native-first) ;;
+            *) echo "::error::order must be jvm-first or native-first"; exit 1 ;;
+          esac
+
+          printf 'PROFILE=%s\n' "$PROFILE_INPUT"  >> "$GITHUB_ENV"
+          printf 'DURATION=%s\n' "$DURATION_INPUT" >> "$GITHUB_ENV"
+          printf 'WARMUP=%s\n'   "$WARMUP_INPUT"   >> "$GITHUB_ENV"
+          printf 'ORDER=%s\n'    "$ORDER_INPUT"     >> "$GITHUB_ENV"
+
+      # ── Determine run sequence ─────────────────────────────────────────────
+      - name: Set runtime sequence
+        id: sequence
+        run: |
+          if [ "$ORDER" = "native-first" ]; then
+            echo "RUNTIME_1=native" >> "$GITHUB_ENV"
+            echo "RUNTIME_2=jvm"    >> "$GITHUB_ENV"
+          else
+            echo "RUNTIME_1=jvm"    >> "$GITHUB_ENV"
+            echo "RUNTIME_2=native" >> "$GITHUB_ENV"
+          fi
+
+      # ══════════════════════════════════════════════════════════════════════
+      # RUNTIME 1
+      # ══════════════════════════════════════════════════════════════════════
+      - name: Run ${{ env.RUNTIME_1 }} (first)
+        id: run_first
+        run: |
+          set +e
+          pwsh ./scripts/run-gatling-test.ps1 \
+            -Profile "$PROFILE" \
+            -DurationMinutes "$DURATION" \
+            -WarmupMinutes "$WARMUP" \
+            -Runtime "$RUNTIME_1" \
+            -ResetState \
+            -DrainCheck
+          echo "EXIT_$RUNTIME_1=$?" >> "$GITHUB_ENV"
+          set -e
+
+      - name: Start docker stats sampler (Runtime 1)
+        id: stats_sampler_1
+        continue-on-error: true
+        run: |
+          # Collect per-replica CPU/memory snapshots every 15 seconds during the run.
+          # Output goes to a file that is later moved to results/<runtime>/.
+          mkdir -p target/run-metrics
+          docker stats --no-stream \
+            boot-high-rps-sample-app-1 \
+            boot-high-rps-sample-app-2 \
+            2>/dev/null \
+            >> target/run-metrics/docker-stats-$RUNTIME_1.txt || true
+
+      - name: Extract stats (Runtime 1)
+        continue-on-error: true
+        run: |
+          if [[ -d target/gatling ]]; then
+            python3 ./scripts/extract-stats.py --out stats-$RUNTIME_1.json || true
+          fi
+
+      - name: Collect diagnostics (Runtime 1)
+        if: always()
+        continue-on-error: true
+        run: python3 ./scripts/collect_diagnostics.py
+
+      - name: Move Runtime 1 results
+        if: always()
+        run: |
+          mkdir -p results/$RUNTIME_1
+          # Gatling HTML report
+          [[ -d target/gatling ]] && mv target/gatling results/$RUNTIME_1/gatling-report || true
+          # Stats JSON
+          [[ -f stats-$RUNTIME_1.json ]] && mv stats-$RUNTIME_1.json results/$RUNTIME_1/ || true
+          # Runtime metrics and drain results
+          [[ -d target/run-metrics ]] && mv target/run-metrics results/$RUNTIME_1/ || true
+          # Diagnostics
+          [[ -d diagnostics ]] && mv diagnostics results/$RUNTIME_1/ || true
+
+      # ══════════════════════════════════════════════════════════════════════
+      # RUNTIME 2
+      # ══════════════════════════════════════════════════════════════════════
+      - name: Run ${{ env.RUNTIME_2 }} (second)
+        id: run_second
+        run: |
+          set +e
+          pwsh ./scripts/run-gatling-test.ps1 \
+            -Profile "$PROFILE" \
+            -DurationMinutes "$DURATION" \
+            -WarmupMinutes "$WARMUP" \
+            -Runtime "$RUNTIME_2" \
+            -ResetState \
+            -DrainCheck
+          echo "EXIT_$RUNTIME_2=$?" >> "$GITHUB_ENV"
+          set -e
+
+      - name: Start docker stats sampler (Runtime 2)
+        id: stats_sampler_2
+        continue-on-error: true
+        run: |
+          mkdir -p target/run-metrics
+          docker stats --no-stream \
+            boot-high-rps-sample-app-1 \
+            boot-high-rps-sample-app-2 \
+            2>/dev/null \
+            >> target/run-metrics/docker-stats-$RUNTIME_2.txt || true
+
+      - name: Extract stats (Runtime 2)
+        continue-on-error: true
+        run: |
+          if [[ -d target/gatling ]]; then
+            python3 ./scripts/extract-stats.py --out stats-$RUNTIME_2.json || true
+          fi
+
+      - name: Collect diagnostics (Runtime 2)
+        if: always()
+        continue-on-error: true
+        run: python3 ./scripts/collect_diagnostics.py
+
+      - name: Move Runtime 2 results
+        if: always()
+        run: |
+          mkdir -p results/$RUNTIME_2
+          [[ -d target/gatling ]] && mv target/gatling results/$RUNTIME_2/gatling-report || true
+          [[ -f stats-$RUNTIME_2.json ]] && mv stats-$RUNTIME_2.json results/$RUNTIME_2/ || true
+          [[ -d target/run-metrics ]] && mv target/run-metrics results/$RUNTIME_2/ || true
+          [[ -d diagnostics ]] && mv diagnostics results/$RUNTIME_2/ || true
+
+      # ══════════════════════════════════════════════════════════════════════
+      # COMPARISON AND SUMMARY
+      # ══════════════════════════════════════════════════════════════════════
+      - name: Compare and summarise
+        if: always()
+        run: |
+          JVM_STATS="results/jvm/stats-jvm.json"
+          NAT_STATS="results/native/stats-native.json"
+
+          echo "## JVM vs Native Runtime Comparison" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Profile:** \`$PROFILE\`  **Duration:** ${DURATION}m  **Warmup:** ${WARMUP}m  **Order:** \`$ORDER\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # ── Time-to-ready ──────────────────────────────────────────────────
+          echo "### Startup Time-to-Ready" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Runtime | Time-to-Ready (s) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          for rt in jvm native; do
+            MFILE="results/$rt/run-metrics/runtime-metrics-$rt.json"
+            if [[ -f "$MFILE" ]]; then
+              TTR=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('timeToReadySec','N/A'))" "$MFILE" 2>/dev/null || echo "N/A")
+            else
+              TTR="N/A"
+            fi
+            echo "| $rt | $TTR |" >> "$GITHUB_STEP_SUMMARY"
+          done
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # ── Drain results ──────────────────────────────────────────────────
+          echo "### Drain Check Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Runtime | Drain Success | Drain Time (s) | DLQ Delta | Authors | Posts | Comments |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|---|---|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          for rt in jvm native; do
+            DFILE="results/$rt/run-metrics/drain-results-$rt.json"
+            if [[ -f "$DFILE" ]]; then
+              python3 -c "
+          import json, sys
+          d = json.load(open(sys.argv[1]))
+          rc = d.get('row_counts', {}) or {}
+          print('| %s | %s | %s | %s | %s | %s | %s |' % (
+            sys.argv[2],
+            d.get('drain_success', 'N/A'),
+            d.get('drain_time_sec', 'N/A'),
+            d.get('dlq_delta', 'N/A'),
+            rc.get('authors', 'N/A'),
+            rc.get('posts', 'N/A'),
+            rc.get('post_comments', 'N/A'),
+          ))
+          " "$DFILE" "$rt" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "| $rt | N/A | N/A | N/A | N/A | N/A | N/A |" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # ── Gatling exit codes ─────────────────────────────────────────────
+          echo "### Gatling Exit Codes" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Runtime | Exit Code |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| jvm | ${EXIT_jvm:-N/A} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| native | ${EXIT_native:-N/A} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # ── Gatling performance comparison ─────────────────────────────────
+          if [[ -f "$JVM_STATS" && -f "$NAT_STATS" ]]; then
+            pwsh ./scripts/compare-results.ps1 \
+              -BaselineStats "$JVM_STATS" \
+              -NewStats "$NAT_STATS" \
+              -BaselineLabel "JVM" \
+              -NewLabel "Native" \
+              >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "⚠️ One or both stats files missing — skipping performance comparison." >> "$GITHUB_STEP_SUMMARY"
+            echo "JVM stats present: $(test -f "$JVM_STATS" && echo yes || echo no)" >> "$GITHUB_STEP_SUMMARY"
+            echo "Native stats present: $(test -f "$NAT_STATS" && echo yes || echo no)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # ══════════════════════════════════════════════════════════════════════
+      # ARTIFACT UPLOAD — separate per-runtime artifacts, runtime-suffixed names
+      # ══════════════════════════════════════════════════════════════════════
+      - name: Upload JVM results artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: runtime-comparison-jvm
+          path: results/jvm/
+          retention-days: 14
+
+      - name: Upload native results artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: runtime-comparison-native
+          path: results/native/
+          retention-days: 14
+
+      # ══════════════════════════════════════════════════════════════════════
+      # FAILURE GATE
+      # Fail for runner, infrastructure, readiness, or drain-check failures.
+      # Expected Gatling assertion failures under stress are non-fatal.
+      # ══════════════════════════════════════════════════════════════════════
+      - name: Check failure gates
+        if: always()
+        run: |
+          FAILED=0
+
+          # Runner and drain failures for either runtime are hard failures
+          for rt in jvm native; do
+            EXIT_VAR="EXIT_$rt"
+            RUN_EXIT="${!EXIT_VAR:-missing}"
+            GATLING_LOG="results/$rt/run-metrics/gatling-$rt.log"
+            # Maven exits 1 for both assertion failures and execution failures.
+            # Only the Gatling plugin's explicit assertion failure is permitted.
+            if [[ "$RUN_EXIT" != "0" ]]; then
+              if [[ "$RUN_EXIT" != "1" ]] || ! grep -Eq 'Gatling simulation assertions failed *!' "$GATLING_LOG"; then
+                echo "::error::Runner FAILED for $rt runtime (exit $RUN_EXIT)"
+                FAILED=1
+              fi
+            fi
+
+            DFILE="results/$rt/run-metrics/drain-results-$rt.json"
+            if [[ -f "$DFILE" ]]; then
+              SUCCESS=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('drain_success') is True and type(d.get('dlq_delta')) is int and d['dlq_delta'] == 0)" "$DFILE" 2>/dev/null || echo "False")
+              if [[ "$SUCCESS" != "True" ]]; then
+                echo "::error::Drain check FAILED for $rt runtime"
+                FAILED=1
+              fi
+            else
+              echo "::error::Drain results missing for $rt runtime: $DFILE"
+              FAILED=1
+            fi
+          done
+
+          exit $FAILED

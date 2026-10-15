@@ -1,0 +1,25 @@
+# Dockerfile.native.dockerignore
+# Exclusions specific to the native image build context.
+# This file is scoped to Dockerfile.native only and does NOT affect the JVM
+# build (Dockerfile) whose build context is the same directory.
+# We deliberately avoid a global .dockerignore so that the JVM build can still
+# pick up target/*.jar.
+
+# Exclude the target directory — the native build produces its own output
+# inside the container; copying stale JVM artifacts would waste bandwidth
+# and risk confusing the build.
+target/
+
+# Exclude local developer artifacts that are never needed in the builder stage
+.git/
+.gitignore
+.github/
+.vscode/
+.mvn/jvm.config
+diagnostics/
+gatling-report/
+docs/
+scripts/
+docker/
+README.md
+renovate.json

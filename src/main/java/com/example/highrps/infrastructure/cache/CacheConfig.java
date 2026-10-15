@@ -4,7 +4,9 @@ import com.example.highrps.shared.config.AppProperties;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import io.lettuce.core.ReadFrom;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.Executors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,8 +15,11 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Profile;
+import org.springframework.core.convert.converter.Converter;
+import org.springframework.data.convert.ReadingConverter;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.convert.RedisCustomConversions;
 import org.springframework.data.redis.repository.configuration.EnableRedisRepositories;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
 
@@ -67,5 +72,68 @@ public class CacheConfig {
     @Profile("production")
     LettuceClientConfigurationBuilderCustomizer lettuceClientConfigurationBuilderCustomizer() {
         return clientConfigurationBuilder -> clientConfigurationBuilder.readFrom(ReadFrom.REPLICA_PREFERRED);
+    }
+
+    /**
+     * Creates Redis reading conversions for byte-array, integer, and long boolean representations.
+     *
+     * @return the custom conversions used when reading Redis entities
+     */
+    @Bean
+    RedisCustomConversions redisCustomConversions() {
+        return new RedisCustomConversions(List.of(
+                BytesToBooleanConverter.INSTANCE, IntegerToBooleanConverter.INSTANCE, LongToBooleanConverter.INSTANCE));
+    }
+
+    @ReadingConverter
+    enum BytesToBooleanConverter implements Converter<byte[], Boolean> {
+        INSTANCE;
+
+        /**
+         * Interprets UTF-8 bytes as true only for {@code "1"} or case-insensitive {@code "true"}.
+         *
+         * @param source the encoded flag; whitespace is not trimmed
+         * @return false for null, empty, or any other input
+         */
+        @Override
+        public Boolean convert(byte[] source) {
+            if (source == null || source.length == 0) {
+                return Boolean.FALSE;
+            }
+            String s = new String(source, StandardCharsets.UTF_8);
+            return "1".equals(s) || "true".equalsIgnoreCase(s);
+        }
+    }
+
+    @ReadingConverter
+    enum IntegerToBooleanConverter implements Converter<Integer, Boolean> {
+        INSTANCE;
+
+        /**
+         * Interprets any nonzero value, including a negative value, as true.
+         *
+         * @param source the numeric flag
+         * @return false for null or zero, otherwise true
+         */
+        @Override
+        public Boolean convert(Integer source) {
+            return source != null && source != 0;
+        }
+    }
+
+    @ReadingConverter
+    enum LongToBooleanConverter implements Converter<Long, Boolean> {
+        INSTANCE;
+
+        /**
+         * Interprets any nonzero value, including a negative value, as true.
+         *
+         * @param source the numeric flag
+         * @return false for null or zero, otherwise true
+         */
+        @Override
+        public Boolean convert(Long source) {
+            return source != null && source != 0L;
+        }
     }
 }

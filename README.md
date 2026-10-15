@@ -105,3 +105,58 @@ We ran JMH benchmarks on the local environment simulating a workload of 90% read
 
 
 **Note on Idempotency Performance:** Implementing idempotency within the Spring Boot application layer via HandlerInterceptor caused write-throughput to plummet from ~100 ops/s to ~8 ops/s, even after optimizing with single-round-trip Redis Lua scripts. The synchronous nature of blocking on Redis for every mutating request starved the connection pools. **Industry standard for High RPS:** To maintain 100,000+ RPS, idempotency checking MUST be offloaded to the API Gateway (e.g., Kong, AWS API Gateway) to keep the Spring Boot hot-path completely non-blocking.
+
+---
+
+## Native Image Build
+
+The project supports an optional GraalVM Native Image build alongside the default JVM build.
+
+### Build the native executable (host)
+
+```bash
+./mvnw -Pnative native:compile -DskipTests
+```
+
+The `native` profile activates AOT compilation with the `production` Spring profile so that
+the `CacheConfig` Lettuce customizer (`REPLICA_PREFERRED`) is included in the native image.
+Do not pass `-XX:+UseZGC` or `-XX:+UseCompressedOops` — these are JVM-only flags not
+accepted by native executables.
+
+### Build and run the native Docker image
+
+```bash
+# Build
+APP_DOCKERFILE=Dockerfile.native APP_IMAGE_TAG=native \
+  docker compose -f docker/docker-compose.yml build app
+
+# Run (both replicas)
+APP_DOCKERFILE=Dockerfile.native APP_IMAGE_TAG=native \
+  docker compose -f docker/docker-compose.yml up -d --scale app=2
+```
+
+The default JVM image is unchanged — omit the environment overrides to use it:
+
+```bash
+docker compose -f docker/docker-compose.yml build app
+docker compose -f docker/docker-compose.yml up -d --scale app=2
+```
+
+### Load-test runner with runtime selection
+
+```powershell
+# JVM (default — unchanged behaviour)
+./scripts/run-gatling-test.ps1 -Profile smoke
+
+# Native with drain check and clean state
+./scripts/run-gatling-test.ps1 -Profile smoke -Runtime native -ResetState -DrainCheck
+```
+
+`-ResetState` tears down all stacks with `-v` and deletes `target/loadtest-data` (including `.complete`)
+before the run, ensuring a clean database and Redis state for each measurement.
+
+`-DrainCheck` records the DLQ length before Gatling (snapshot mode) and waits for
+`batch-processor-group` to drain (`lag=0`, `pending=0`) after Gatling (wait mode).
+
+See `docs/LOAD_TESTING.md` for validity conditions and improvement criteria before
+interpreting native-vs-JVM throughput numbers.

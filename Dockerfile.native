@@ -1,0 +1,84 @@
+# syntax=docker/dockerfile:1
+# ---------------------------------------------------------------------------
+# Dockerfile.native — GraalVM Native Image build
+#
+# Builder : ghcr.io/graalvm/native-image-community:25
+#           (pinned to the 25.x line; glibc 2.31 on ubuntu:20.04 base)
+# Runtime : debian:12-slim (glibc 2.36 — newer than builder, satisfying the
+#           "not older than the builder's glibc" requirement because glibc is
+#           backwards-compatible: a binary compiled against 2.31 runs on 2.36)
+#
+# Skip flags used during native:compile to avoid tools not needed at image build time:
+#   -Dspotless.check.skip=true   — code-style gate irrelevant for compilation
+#   -Djacoco.skip=true           — no bytecode instrumentation in native lifecycle
+#   -Dmaven.gitcommitid.skip=true — no .git directory inside the build container
+#
+# JVM / native flags:
+#   -Xmx2g  — max heap for the image builder process (passes to native-maven-plugin)
+#   NOTE: -XX:+UseZGC, -XX:+UseCompressedOops, and -Xms are NOT passed.
+#         Native images use their own GC (Serial GC by default in Community);
+#         ZGC and CompressedOops are JVM-only flags that the native launcher
+#         does not accept.  -Xms is not set because native startup heap is
+#         managed differently; verify via runtime testing before adding it.
+# ---------------------------------------------------------------------------
+
+# ── Stage 1: build ─────────────────────────────────────────────────────────
+FROM ghcr.io/graalvm/native-image-community:25 AS builder
+
+WORKDIR /build
+
+# Copy the Maven wrapper and project descriptor first for layer-cache efficiency
+COPY mvnw mvnw
+COPY .mvn/ .mvn/
+COPY pom.xml pom.xml
+COPY sonar-project.properties* ./
+
+# Copy the full source tree
+COPY src/ src/
+
+# Run native compilation with a BuildKit Maven local-repository cache mount.
+# The cache persists across builds on the same Docker host, dramatically
+# reducing cold-build dependency download time.
+#
+# Skip flags:
+#   -Dspotless.check.skip=true  — no style gate needed in the builder
+#   -Djacoco.skip=true          — jacoco instruments bytecode; irrelevant here
+#   -Dmaven.gitcommitid.skip=true — no .git dir inside the container
+RUN --mount=type=cache,target=/root/.m2/repository \
+    sed -i 's/\r$//' mvnw && \
+    chmod +x mvnw && \
+    ./mvnw -Pnative native:compile \
+        -DskipTests \
+        -Dspotless.check.skip=true \
+        -Djacoco.skip=true \
+        -Dmaven.gitcommitid.skip=true \
+        --batch-mode
+
+# ── Stage 2: runtime ────────────────────────────────────────────────────────
+# debian:12-slim ships glibc 2.36, which is newer than the builder's glibc
+# (Ubuntu 20.04 / glibc 2.31).  Native binaries are forwards-compatible with
+# a newer glibc, so this combination is safe.
+FROM debian:12-slim
+
+# Install curl (for the healthcheck) and clean apt lists to minimise image size
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# Run as non-root user
+RUN groupadd --system spring && useradd --system --gid spring spring
+RUN mkdir /logs && chown spring:spring /logs
+USER spring:spring
+
+# Copy only the compiled native executable from the builder stage
+COPY --from=builder /build/target/boot-high-rps-sample app
+
+EXPOSE 8080
+
+# Native images do not accept JVM flags such as -XX:+UseZGC, -XX:+UseCompressedOops,
+# or -Xms.  Only -Xmx2g is safe here (native runtime heap ceiling).
+ENTRYPOINT ["./app", "-Xmx2g"]
+
+# Health check for container orchestration — identical to the JVM Dockerfile
+HEALTHCHECK --interval=30s --timeout=3s --start-period=40s \
+  CMD curl -sf http://localhost:8080/actuator/health || exit 1

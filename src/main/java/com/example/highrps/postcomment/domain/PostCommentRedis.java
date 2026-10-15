@@ -22,7 +22,7 @@ public class PostCommentRedis extends Auditable implements Serializable {
 
     private String title;
     private String content;
-    private boolean published;
+    private Boolean published = Boolean.FALSE;
     private OffsetDateTime publishedAt;
 
     public PostCommentRedis() {}
@@ -63,13 +63,24 @@ public class PostCommentRedis extends Auditable implements Serializable {
         return content;
     }
 
-    public PostCommentRedis setPublished(boolean published) {
+    /**
+     * Sets the publication flag without changing the publication timestamp.
+     *
+     * @param published the flag to store; {@code null} is read as unpublished by {@link #isPublished()}
+     * @return this instance
+     */
+    public PostCommentRedis setPublished(Boolean published) {
         this.published = published;
         return this;
     }
 
+    /**
+     * Returns whether the stored publication flag is true, treating {@code null} as false.
+     *
+     * @return true only when the stored flag is {@link Boolean#TRUE}
+     */
     public boolean isPublished() {
-        return published;
+        return Boolean.TRUE.equals(published);
     }
 
     public PostCommentRedis setPublishedAt(OffsetDateTime publishedAt) {
