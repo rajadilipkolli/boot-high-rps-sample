@@ -1,0 +1,58 @@
+[
+  {
+    "name": "com.google.protobuf.ExtensionRegistry",
+    "allDeclaredFields": true,
+    "allDeclaredMethods": true,
+    "allDeclaredConstructors": true,
+    "methods": [
+      {
+        "name": "getEmptyRegistry",
+        "parameterTypes": []
+      },
+      {
+        "name": "newInstance",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "com.google.protobuf.ExtensionRegistryLite",
+    "allDeclaredFields": true,
+    "allDeclaredMethods": true,
+    "allDeclaredConstructors": true,
+    "methods": [
+      {
+        "name": "getEmptyRegistry",
+        "parameterTypes": []
+      },
+      {
+        "name": "newInstance",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "com.github.benmanes.caffeine.cache.SSLSMSW",
+    "allDeclaredFields": true,
+    "allDeclaredMethods": true,
+    "allDeclaredConstructors": true
+  },
+  {
+    "name": "com.github.benmanes.caffeine.cache.SSLSMSWR",
+    "allDeclaredFields": true,
+    "allDeclaredMethods": true,
+    "allDeclaredConstructors": true
+  },
+  {
+    "name": "com.github.benmanes.caffeine.cache.SSLSMS",
+    "allDeclaredFields": true,
+    "allDeclaredMethods": true,
+    "allDeclaredConstructors": true
+  },
+  {
+    "name": "com.github.benmanes.caffeine.cache.SSLS",
+    "allDeclaredFields": true,
+    "allDeclaredMethods": true,
+    "allDeclaredConstructors": true
+  }
+]

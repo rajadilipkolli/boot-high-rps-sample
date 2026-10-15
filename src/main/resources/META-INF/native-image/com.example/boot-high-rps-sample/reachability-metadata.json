@@ -461,6 +461,30 @@
           "parameterTypes": []
         }
       ]
+    },
+    {
+      "type": "com.github.benmanes.caffeine.cache.SSLSMSW",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true
+    },
+    {
+      "type": "com.github.benmanes.caffeine.cache.SSLSMSWR",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true
+    },
+    {
+      "type": "com.github.benmanes.caffeine.cache.SSLSMS",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true
+    },
+    {
+      "type": "com.github.benmanes.caffeine.cache.SSLS",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true
     }
   ],
   "resources": [

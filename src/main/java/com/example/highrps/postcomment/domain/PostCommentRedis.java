@@ -22,7 +22,7 @@ public class PostCommentRedis extends Auditable implements Serializable {
 
     private String title;
     private String content;
-    private boolean published;
+    private Boolean published = Boolean.FALSE;
     private OffsetDateTime publishedAt;
 
     public PostCommentRedis() {}
@@ -63,13 +63,13 @@ public class PostCommentRedis extends Auditable implements Serializable {
         return content;
     }
 
-    public PostCommentRedis setPublished(boolean published) {
+    public PostCommentRedis setPublished(Boolean published) {
         this.published = published;
         return this;
     }
 
     public boolean isPublished() {
-        return published;
+        return Boolean.TRUE.equals(published);
     }
 
     public PostCommentRedis setPublishedAt(OffsetDateTime publishedAt) {

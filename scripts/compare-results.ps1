@@ -147,7 +147,7 @@ $dSuccessRpsG = if ($bSuccessRpsG -ne "N/A" -and $nSuccessRpsG -ne "N/A") {
 } else { "N/A" }
 
 Write-Output "| Throughput (RPS) | $bRpsG | $nRpsG | $dRpsG |"
-Write-Output "| Successful RPS (mean × OK/total) | $bSuccessRpsG | $nSuccessRpsG | $dSuccessRpsG |"
+Write-Output "| Successful RPS (mean * OK/total) | $bSuccessRpsG | $nSuccessRpsG | $dSuccessRpsG |"
 Write-Output "| Error Rate (%) | $bErrRateG | $nErrRateG | $dErrRateG |"
 Write-Output "| p50 (ms) | $bP50G | $nP50G | $(if ($bP50G -ne 'N/A' -and $nP50G -ne 'N/A') {$nP50G - $bP50G} else {'N/A'}) |"
 Write-Output "| p75 (ms) | $bP75G | $nP75G | $(if ($bP75G -ne 'N/A' -and $nP75G -ne 'N/A') {$nP75G - $bP75G} else {'N/A'}) |"
@@ -157,7 +157,7 @@ Write-Output "| Max (ms) | $bMaxG | $nMaxG | $(if ($bMaxG -ne 'N/A' -and $nMaxG 
 
 # Per-endpoint successful RPS
 Write-Output ""
-Write-Output "### Per-Endpoint Successful RPS (mean RPS × OK / total)"
+Write-Output "### Per-Endpoint Successful RPS (mean RPS * OK / total)"
 Write-Output ""
 Write-Output "| Endpoint | $BaselineLabel | $NewLabel | Delta |"
 Write-Output "|---|---|---|---|"

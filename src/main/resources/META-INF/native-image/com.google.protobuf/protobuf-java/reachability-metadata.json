@@ -1,0 +1,36 @@
+{
+  "reflection": [
+    {
+      "type": "com.google.protobuf.ExtensionRegistry",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "methods": [
+        {
+          "name": "getEmptyRegistry",
+          "parameterTypes": []
+        },
+        {
+          "name": "newInstance",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "com.google.protobuf.ExtensionRegistryLite",
+      "allDeclaredConstructors": true,
+      "allDeclaredMethods": true,
+      "allDeclaredFields": true,
+      "methods": [
+        {
+          "name": "getEmptyRegistry",
+          "parameterTypes": []
+        },
+        {
+          "name": "newInstance",
+          "parameterTypes": []
+        }
+      ]
+    }
+  ]
+}

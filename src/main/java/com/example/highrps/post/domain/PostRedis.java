@@ -21,7 +21,7 @@ public class PostRedis implements Serializable {
     private String title;
 
     private String content;
-    private boolean published;
+    private Boolean published = Boolean.FALSE;
     private LocalDateTime publishedAt;
 
     @Indexed
@@ -63,13 +63,13 @@ public class PostRedis implements Serializable {
         return content;
     }
 
-    public PostRedis setPublished(boolean published) {
+    public PostRedis setPublished(Boolean published) {
         this.published = published;
         return this;
     }
 
     public boolean isPublished() {
-        return published;
+        return Boolean.TRUE.equals(published);
     }
 
     public PostRedis setPublishedAt(LocalDateTime publishedAt) {

@@ -41,6 +41,12 @@ function Test-RequiredFeederFiles {
     return $true
 }
 
+if (-not $env:JAVA_HOME -or -not (Test-Path $env:JAVA_HOME)) {
+    if (Test-Path "C:\Users\1039060\.jdks\graalvm-ce-25.0.2") {
+        $env:JAVA_HOME = "C:\Users\1039060\.jdks\graalvm-ce-25.0.2"
+    }
+}
+
 # ── Derive Docker image tag and dockerfile from runtime ──────────────────────
 # These must be set before any Compose call because the main stack starts before
 # packaging is complete.
@@ -175,6 +181,14 @@ if ((Test-Path -LiteralPath $CompletionMarker -PathType Leaf) -and $RequiredFeed
     }
 
     Write-Host "App is UP! Running Data Generator..."
+    if (-not (Test-Path "target/test-classes/com/example/highrps/gatling/setup/DataGenerator.class")) {
+        Write-Host "Compiling test classes for Data Generator..."
+        if ($env:OS -eq 'Windows_NT') {
+            cmd /c "mvnw.cmd test-compile -DskipTests -Dspotless.check.skip=true -Djacoco.skip=true"
+        } else {
+            sh -c "./mvnw test-compile -DskipTests -Dspotless.check.skip=true -Djacoco.skip=true"
+        }
+    }
     if ($env:OS -eq 'Windows_NT') {
         cmd /c "mvnw.cmd exec:java -Dexec.mainClass=com.example.highrps.gatling.setup.DataGenerator -Dexec.classpathScope=test -DdataDir=$DataDirectory -Dprofile=$Profile"
     } else {
