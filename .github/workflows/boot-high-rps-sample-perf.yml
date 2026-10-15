@@ -32,6 +32,10 @@ on:
         description: 'Comment delete operation weight'
         required: false
         default: '1.0'
+      runtime:
+        description: 'Runtime to test (jvm or native). Default: jvm. Adopt native only after Task 3 comparison criteria are met.'
+        required: false
+        default: 'jvm'
 
 permissions:
   contents: write
@@ -63,6 +67,7 @@ jobs:
           POST_DELETE_WEIGHT: ${{ github.event.inputs.postDeleteWeight || '1.0' }}
           COMMENT_UPDATE_WEIGHT: ${{ github.event.inputs.commentUpdateWeight || '1.0' }}
           COMMENT_DELETE_WEIGHT: ${{ github.event.inputs.commentDeleteWeight || '1.0' }}
+          RUNTIME_INPUT: ${{ github.event.inputs.runtime || 'jvm' }}
         run: |
           case "$PROFILE_INPUT" in
             normal|high|stress) ;;
@@ -78,6 +83,12 @@ jobs:
             echo "::error::targetRps must be a positive number"
             exit 1
           fi
+
+          case "$RUNTIME_INPUT" in
+            jvm|native) ;;
+            *) echo "::error::runtime must be jvm or native"; exit 1 ;;
+          esac
+
           printf 'PROFILE=%s\n' "$PROFILE_INPUT" >> "$GITHUB_ENV"
           printf 'DURATION=%s\n' "$DURATION_INPUT" >> "$GITHUB_ENV"
           printf 'TARGET_RPS=%s\n' "$TARGET_RPS_INPUT" >> "$GITHUB_ENV"
@@ -85,6 +96,17 @@ jobs:
           printf 'POST_DELETE_WEIGHT=%s\n' "$POST_DELETE_WEIGHT" >> "$GITHUB_ENV"
           printf 'COMMENT_UPDATE_WEIGHT=%s\n' "$COMMENT_UPDATE_WEIGHT" >> "$GITHUB_ENV"
           printf 'COMMENT_DELETE_WEIGHT=%s\n' "$COMMENT_DELETE_WEIGHT" >> "$GITHUB_ENV"
+          printf 'RUNTIME=%s\n' "$RUNTIME_INPUT" >> "$GITHUB_ENV"
+
+          # Baseline path: JVM keeps the existing naming convention for backwards
+          # compatibility with existing main-baseline-*.json files.
+          # Native uses a runtime-suffixed path so the two runtimes cannot
+          # overwrite each other's baselines.
+          if [[ "$RUNTIME_INPUT" == "native" ]]; then
+            printf 'BASELINE_FILE=docs/baselines/main-baseline-native-%s.json\n' "$PROFILE_INPUT" >> "$GITHUB_ENV"
+          else
+            printf 'BASELINE_FILE=docs/baselines/main-baseline-%s.json\n' "$PROFILE_INPUT" >> "$GITHUB_ENV"
+          fi
 
 
       - name: Run Gatling Tests against HEAD
@@ -92,9 +114,9 @@ jobs:
           # We are already on the triggered commit (HEAD)
           set +e
           if [ -n "$TARGET_RPS" ]; then
-            pwsh ./scripts/run-gatling-test.ps1 -Profile $PROFILE -DurationMinutes $DURATION -WarmupMinutes 0 -TargetRps "$TARGET_RPS"
+            pwsh ./scripts/run-gatling-test.ps1 -Profile $PROFILE -DurationMinutes $DURATION -WarmupMinutes 0 -TargetRps "$TARGET_RPS" -Runtime "$RUNTIME"
           else
-            pwsh ./scripts/run-gatling-test.ps1 -Profile $PROFILE -DurationMinutes $DURATION -WarmupMinutes 0
+            pwsh ./scripts/run-gatling-test.ps1 -Profile $PROFILE -DurationMinutes $DURATION -WarmupMinutes 0 -Runtime "$RUNTIME"
           fi
           GATLING_EXIT_CODE=$?
           set -e
@@ -117,7 +139,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
-          name: performance-diagnostics
+          name: performance-diagnostics-${{ env.RUNTIME }}
           path: diagnostics/
           retention-days: 14
 
@@ -132,8 +154,8 @@ jobs:
             echo "Check the **Run Gatling Tests against HEAD** step logs for details." >> $GITHUB_STEP_SUMMARY
             exit 0
           fi
-          if [ -f docs/baselines/main-baseline-$PROFILE.json ]; then
-            pwsh ./scripts/compare-results.ps1 -BaselineStats docs/baselines/main-baseline-$PROFILE.json -NewStats stats.json > comparison.md
+          if [ -f "$BASELINE_FILE" ]; then
+            pwsh ./scripts/compare-results.ps1 -BaselineStats "$BASELINE_FILE" -NewStats stats.json > comparison.md
             cat comparison.md >> $GITHUB_STEP_SUMMARY
           else
             echo "No baseline found to compare against. This run will establish the first baseline." >> $GITHUB_STEP_SUMMARY
@@ -143,7 +165,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
-          name: gatling-report
+          name: gatling-report-${{ env.RUNTIME }}
           path: gatling-report/
           retention-days: 14
 
@@ -151,10 +173,10 @@ jobs:
         if: success() && github.ref == 'refs/heads/main'
         run: |
           mkdir -p docs/baselines
-          cp stats.json docs/baselines/main-baseline-$PROFILE.json
+          cp stats.json "$BASELINE_FILE"
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add docs/baselines/main-baseline-$PROFILE.json
+          git add "$BASELINE_FILE"
           if git diff --staged --quiet; then
             echo "Baseline unchanged."
           else

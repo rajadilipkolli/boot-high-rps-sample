@@ -71,3 +71,24 @@ The application enforces strict architectural boundaries using Spring Modulith.
 - **Infrastructure Supplier**: The `infrastructure` module acts as a supplier, depending only on `shared`. It provides cross-cutting concerns (Cache, Redis).
 - **Module API Boundaries**: Domain modules expose specific packages via `@NamedInterface` to limit access. The only declared named interfaces are `infrastructure::cache` and `infrastructure::redis`.
 - **Validation**: `ModulithStructureTest` continuously verifies these boundaries during the build via `ApplicationModules.verify()`.
+
+## Runtime Images
+
+The project produces two Docker images from the same source tree:
+
+| Image             | Dockerfile          | Builder                                     | Runtime base                   | GC                            | Notes                                |
+|-------------------|---------------------|---------------------------------------------|--------------------------------|-------------------------------|--------------------------------------|
+| **JVM** (default) | `Dockerfile`        | Host Maven + `eclipse-temurin:25`           | `eclipse-temurin:25-jre-jammy` | ZGC                           | `-XX:+UseZGC -Xms1g -Xmx2g`          |
+| **Native**        | `Dockerfile.native` | `ghcr.io/graalvm/native-image-community:25` | `debian:12-slim`               | Serial GC (Community default) | `-Xmx2g` only; no ZGC/CompressedOops |
+
+Select the image at Compose time:
+```
+# JVM (default — unchanged)
+docker compose -f docker/docker-compose.yml build app
+
+# Native
+APP_DOCKERFILE=Dockerfile.native APP_IMAGE_TAG=native \
+  docker compose -f docker/docker-compose.yml build app
+```
+
+The AOT compilation for the native image activates the `production` Spring profile so that the `CacheConfig` Lettuce read-from-replica customizer (`REPLICA_PREFERRED`) is registered during the `process-aot` phase and baked into the native executable.

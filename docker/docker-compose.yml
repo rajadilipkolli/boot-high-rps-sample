@@ -66,10 +66,10 @@ services:
 #      - demo-network
 
   app:
-    image: boot-high-rps-sample:latest
+    image: boot-high-rps-sample:${APP_IMAGE_TAG:-latest}
     build:
       context: ..
-      dockerfile: Dockerfile
+      dockerfile: ${APP_DOCKERFILE:-Dockerfile}
     environment:
       - SPRING_PROFILES_ACTIVE=production
       - TSID_NODE_COUNT=10

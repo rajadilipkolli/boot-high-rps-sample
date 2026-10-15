@@ -9,7 +9,14 @@ param(
     [string]$BaselineDiagnostics = "",
     
     [Parameter(Mandatory=$False)]
-    [string]$NewDiagnostics = ""
+    [string]$NewDiagnostics = "",
+
+    # Optional labels — default to existing names so the script is backward-compatible
+    [Parameter(Mandatory=$False)]
+    [string]$BaselineLabel = "Baseline",
+
+    [Parameter(Mandatory=$False)]
+    [string]$NewLabel = "High RPS"
 )
 
 if (-not (Test-Path $BaselineStats) -or -not (Test-Path $NewStats)) {
@@ -44,7 +51,7 @@ foreach ($endpoint in $endpoints) {
     if ($null -eq $bEnd -and $null -eq $nEnd) { continue }
     
     Write-Output "#### Endpoint: $endpoint"
-    Write-Output "| Metric | Baseline | High RPS | Delta |"
+    Write-Output "| Metric | $BaselineLabel | $NewLabel | Delta |"
     Write-Output "|---|---|---|---|"
     
     if ($null -ne $bEnd) { $bStats = $bEnd.stats } else { $bStats = $null }
@@ -100,7 +107,7 @@ foreach ($endpoint in $endpoints) {
 
 Write-Output "### Global (Aggregate) Statistics (Complementary)"
 Write-Output ""
-Write-Output "| Metric | Baseline | High RPS | Delta |"
+Write-Output "| Metric | $BaselineLabel | $NewLabel | Delta |"
 Write-Output "|---|---|---|---|"
 $bGlob = $base.stats
 $nGlob = $new.stats
@@ -124,20 +131,61 @@ $bP99G = Get-Stat $bGlob "percentiles4.total"
 $nP99G = Get-Stat $nGlob "percentiles4.total"
 $bMaxG = Get-Stat $bGlob "maxResponseTime.total"
 $nMaxG = Get-Stat $nGlob "maxResponseTime.total"
+$bOkG = Get-Stat $bGlob "numberOfRequests.ok"
+$nOkG = Get-Stat $nGlob "numberOfRequests.ok"
+
+# Successful RPS = mean RPS × (OK / total) — measures throughput of successful requests only.
+# This is the primary throughput metric for JVM vs native comparison.
+$bSuccessRpsG = if ($bRpsG -ne "N/A" -and $bOkG -ne "N/A" -and $bTotalG -gt 0) {
+    [math]::Round($bRpsG * ($bOkG / $bTotalG), 2)
+} else { "N/A" }
+$nSuccessRpsG = if ($nRpsG -ne "N/A" -and $nOkG -ne "N/A" -and $nTotalG -gt 0) {
+    [math]::Round($nRpsG * ($nOkG / $nTotalG), 2)
+} else { "N/A" }
+$dSuccessRpsG = if ($bSuccessRpsG -ne "N/A" -and $nSuccessRpsG -ne "N/A") {
+    [math]::Round($nSuccessRpsG - $bSuccessRpsG, 2)
+} else { "N/A" }
+
 Write-Output "| Throughput (RPS) | $bRpsG | $nRpsG | $dRpsG |"
+Write-Output "| Successful RPS (mean × OK/total) | $bSuccessRpsG | $nSuccessRpsG | $dSuccessRpsG |"
 Write-Output "| Error Rate (%) | $bErrRateG | $nErrRateG | $dErrRateG |"
 Write-Output "| p50 (ms) | $bP50G | $nP50G | $(if ($bP50G -ne 'N/A' -and $nP50G -ne 'N/A') {$nP50G - $bP50G} else {'N/A'}) |"
 Write-Output "| p75 (ms) | $bP75G | $nP75G | $(if ($bP75G -ne 'N/A' -and $nP75G -ne 'N/A') {$nP75G - $bP75G} else {'N/A'}) |"
 Write-Output "| p95 (ms) | $bP95G | $nP95G | $(if ($bP95G -ne 'N/A' -and $nP95G -ne 'N/A') {$nP95G - $bP95G} else {'N/A'}) |"
 Write-Output "| p99 (ms) | $bP99G | $nP99G | $(if ($bP99G -ne 'N/A' -and $nP99G -ne 'N/A') {$nP99G - $bP99G} else {'N/A'}) |"
 Write-Output "| Max (ms) | $bMaxG | $nMaxG | $(if ($bMaxG -ne 'N/A' -and $nMaxG -ne 'N/A') {$nMaxG - $bMaxG} else {'N/A'}) |"
+
+# Per-endpoint successful RPS
+Write-Output ""
+Write-Output "### Per-Endpoint Successful RPS (mean RPS × OK / total)"
+Write-Output ""
+Write-Output "| Endpoint | $BaselineLabel | $NewLabel | Delta |"
+Write-Output "|---|---|---|---|"
+foreach ($endpoint in $endpoints) {
+    $bEnd2 = $base.contents.$endpoint
+    $nEnd2 = $new.contents.$endpoint
+    if ($null -eq $bEnd2 -and $null -eq $nEnd2) { continue }
+    $bStats2 = if ($null -ne $bEnd2) { $bEnd2.stats } else { $null }
+    $nStats2 = if ($null -ne $nEnd2) { $nEnd2.stats } else { $null }
+    $bRps2  = Get-Stat $bStats2 "meanNumberOfRequestsPerSecond.total"
+    $nRps2  = Get-Stat $nStats2 "meanNumberOfRequestsPerSecond.total"
+    $bOk2   = Get-Stat $bStats2 "numberOfRequests.ok"
+    $nOk2   = Get-Stat $nStats2 "numberOfRequests.ok"
+    $bTot2  = Get-Stat $bStats2 "numberOfRequests.total"
+    $nTot2  = Get-Stat $nStats2 "numberOfRequests.total"
+    $bSRps  = if ($bRps2 -ne "N/A" -and $bOk2 -ne "N/A" -and $bTot2 -gt 0) { [math]::Round($bRps2 * ($bOk2 / $bTot2), 2) } else { "N/A" }
+    $nSRps  = if ($nRps2 -ne "N/A" -and $nOk2 -ne "N/A" -and $nTot2 -gt 0) { [math]::Round($nRps2 * ($nOk2 / $nTot2), 2) } else { "N/A" }
+    $dSRps  = if ($bSRps -ne "N/A" -and $nSRps -ne "N/A") { [math]::Round($nSRps - $bSRps, 2) } else { "N/A" }
+    Write-Output "| $endpoint | $bSRps | $nSRps | $dSRps |"
+}
+
 Write-Output ""
 Write-Output "### Diagnostics Comparison"
 Write-Output ""
 if ($BaselineDiagnostics -ne "" -and $NewDiagnostics -ne "" -and (Test-Path $BaselineDiagnostics) -and (Test-Path $NewDiagnostics)) {
     $bDiag = Get-Content $BaselineDiagnostics | ConvertFrom-Json
     $nDiag = Get-Content $NewDiagnostics | ConvertFrom-Json
-    Write-Output "| Metric | Baseline | High RPS | Delta |"
+    Write-Output "| Metric | $BaselineLabel | $NewLabel | Delta |"
     Write-Output "|---|---|---|---|"
     
     $metrics = @("cpu", "memory", "gc_pause", "allocation_rate", "thread_count", "db_connections", "db_pool_utilization", "query_latency", "host_cpu", "host_memory")

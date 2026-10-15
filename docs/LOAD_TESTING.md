@@ -83,4 +83,58 @@ The scenarios already contain built-in functional assertions:
 - **Delete semantics**: A sampled deleted resource returns 404 Not Found on a follow-up GET.
 
 ## Portability (k6/Kubernetes)
-The externalized workload model (scenarios, weights, feeders, data distribution, profiles, ramp) is fully reusable for a future k6 or Kubernetes-native distributed implementation. Only the tool syntax changes, while the logic, pools, and traffic distribution remain portable.
+The externalized workload model (scenarios, weights, feeders, data distribution, profiles, ramp) is fully reusable for a future k6 or Kubernetes-based distributed implementation. Only the tool syntax changes, while the logic, pools, and traffic distribution remain portable.
+
+---
+
+## JVM vs Native Comparison
+
+This section defines the protocol, validity conditions, improvement criteria, and caveats for comparing the JVM and GraalVM Native Image runtimes on the same runner using the comparison workflow (`.github/workflows/boot-high-rps-sample-runtime-comparison.yml`).
+
+### Required Identical Settings
+
+Both runtimes **must** share all of the following in each dispatch:
+- **Dataset**: identical seed, identical author/post/comment/tag pool sizes.
+- **Weights**: identical load-operation weights (readPost, readComments, readTagPosts, createComment, createPost, registerAuthor, postUpdate, postDelete, commentUpdate, commentDelete).
+- **Load shape**: identical profile (`stress` for throughput comparison), ramp, duration, and warm-up (minimum 3 minutes, applied to both runtimes).
+- **Heap ceiling**: `-Xmx2g` for both (JVM: `-Xmx2g`, native: `-Xmx2g` passed to the native executable).
+- **Observability**: 100% tracing sampling (`management.tracing.sampling.probability=1.0`), DEBUG logging, LGTM/Grafana handling identical.
+- **Clean state**: each run starts from `-ResetState` to ensure the database and Redis are empty.
+
+### Validity Conditions
+
+A comparison dispatch is **valid** only if all of the following hold for both runtimes:
+
+1. Both runtimes pass readiness (app reports `UP` at `/actuator/health`).
+2. Completed drain with zero `lag` and zero `pending` for `batch-processor-group` on `events:queue` (confirmed by `check-drain.py wait`).
+3. Zero DLQ delta (no new entries in `events:dlq` during the run).
+4. Gatling KO rate ≤ `maxErrorRate` (the verify-step assertion threshold).
+
+Any run that fails conditions 1–3 is invalid and must be repeated. Gatling KO above `maxErrorRate` (condition 4) does not invalidate the drain check but does render throughput numbers unreliable for performance comparison purposes.
+
+### Improvement Criteria
+
+Native is considered improved over JVM under `stress` if and only if **all** of the following hold:
+
+1. Native global successful RPS ≥ JVM global successful RPS × 1.05 (at least 5% higher).
+2. The absolute difference exceeds repeated-run spread (i.e., the gap is larger than run-to-run noise observed in multiple same-runtime dispatches).
+3. Native error rate ≤ JVM error rate.
+4. Native p99 ≤ JVM p99.
+5. The result is **confirmed in at least two dispatches with opposite `order` values** (`jvm-first` and `native-first`) to rule out runner warm-up bias.
+
+### Caveats
+
+- **Community Serial GC**: GraalVM Community Edition uses Serial GC by default (not G1 or ZGC). JVM runs use ZGC (`-XX:+UseZGC`). This is a significant throughput disadvantage for native at high heap pressure. If Community results are close to JVM, Oracle GraalVM with G1 + PGO should be evaluated as a follow-up without adopting Community native.
+- **No PGO**: Community Native Image does not include Profile-Guided Optimisation. The JVM benefits from JIT warm-up (C2) by the time the warm-up phase ends, while the native executable is already at peak performance but without PGO-optimised code paths.
+- **Shared runner CPU**: GitHub-hosted runners share CPU with other jobs. Run-to-run variance can be 10–20% on shared runners. Always compare runs on the same runner and at the same time-of-day when possible.
+- **Startup and memory**: Report startup time-to-ready and per-replica peak/average memory only as secondary benefits. These do not constitute the primary adoption criterion.
+
+### Measured Results
+
+> _Results to be filled in after dispatching the comparison workflow at least twice with opposite order values._
+
+| Dispatch | Order | JVM Successful RPS | Native Successful RPS | Improvement | Valid? |
+|----------|-------|--------------------|-----------------------|-------------|--------|
+| —        | —     | —                  | —                     | —           | —      |
+
+**Decision**: Pending. Proceed to Phase 4 (native adoption in perf workflow) only if native meets every throughput criterion above.
