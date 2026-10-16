@@ -60,6 +60,8 @@ RUN --mount=type=cache,target=/root/.m2/repository \
 # a newer glibc, so this combination is safe.
 FROM debian:13-slim
 
+ENV SPRING_PROFILES_ACTIVE=production
+
 # Install curl (for the healthcheck) and clean apt lists to minimise image size
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl && \
@@ -76,8 +78,8 @@ COPY --from=builder /build/target/boot-high-rps-sample app
 EXPOSE 8080
 
 # Native images do not accept JVM flags such as -XX:+UseZGC, -XX:+UseCompressedOops,
-# or -Xms.  Only -Xmx2g is safe here (native runtime heap ceiling).
-ENTRYPOINT ["./app", "-Xmx2g"]
+# or -Xms. Only -Xmx2g is safe here (native runtime heap ceiling).
+ENTRYPOINT ["./app", "-Xmx2g", "-Dspring.profiles.active=production"]
 
 # Health check for container orchestration — identical to the JVM Dockerfile
 HEALTHCHECK --interval=30s --timeout=3s --start-period=40s \

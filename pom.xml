@@ -524,8 +524,6 @@
                                     <goal>enhance</goal>
                                 </goals>
                                 <configuration>
-                                    <enableLazyInitialization>true</enableLazyInitialization>
-                                    <enableDirtyTracking>true</enableDirtyTracking>
                                     <enableAssociationManagement>false</enableAssociationManagement>
                                 </configuration>
                             </execution>
