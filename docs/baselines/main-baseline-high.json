@@ -1,18 +1,18 @@
 {
   "stats": {
     "numberOfRequests": {
-      "total": 156657,
-      "ok": 156493,
-      "ko": 164
+      "total": 157494,
+      "ok": 157289,
+      "ko": 205
     },
     "meanNumberOfRequestsPerSecond": {
-      "total": 174.06
+      "total": 174.99
     },
     "minResponseTime": {
       "total": 0
     },
     "maxResponseTime": {
-      "total": 157
+      "total": 72
     },
     "percentiles1": {
       "total": 1
@@ -21,7 +21,7 @@
       "total": 2
     },
     "percentiles3": {
-      "total": 3
+      "total": 4
     },
     "percentiles4": {
       "total": 5
@@ -31,21 +31,21 @@
     "comment_create": {
       "stats": {
         "numberOfRequests": {
-          "total": 13622,
-          "ok": 13622,
+          "total": 13463,
+          "ok": 13463,
           "ko": 0
         },
         "meanNumberOfRequestsPerSecond": {
-          "total": 15.14
+          "total": 14.96
         },
         "minResponseTime": {
           "total": 1
         },
         "maxResponseTime": {
-          "total": 43
+          "total": 58
         },
         "percentiles1": {
-          "total": 2
+          "total": 3
         },
         "percentiles2": {
           "total": 3
@@ -58,21 +58,81 @@
         }
       }
     },
-    "post_read": {
+    "tag_read": {
       "stats": {
         "numberOfRequests": {
-          "total": 36813,
-          "ok": 36813,
+          "total": 45920,
+          "ok": 45920,
           "ko": 0
         },
         "meanNumberOfRequestsPerSecond": {
-          "total": 40.9
+          "total": 51.02
         },
         "minResponseTime": {
           "total": 0
         },
         "maxResponseTime": {
-          "total": 19
+          "total": 35
+        },
+        "percentiles1": {
+          "total": 1
+        },
+        "percentiles2": {
+          "total": 1
+        },
+        "percentiles3": {
+          "total": 1
+        },
+        "percentiles4": {
+          "total": 2
+        }
+      }
+    },
+    "comment_read": {
+      "stats": {
+        "numberOfRequests": {
+          "total": 18058,
+          "ok": 18058,
+          "ko": 0
+        },
+        "meanNumberOfRequestsPerSecond": {
+          "total": 20.06
+        },
+        "minResponseTime": {
+          "total": 0
+        },
+        "maxResponseTime": {
+          "total": 71
+        },
+        "percentiles1": {
+          "total": 2
+        },
+        "percentiles2": {
+          "total": 2
+        },
+        "percentiles3": {
+          "total": 3
+        },
+        "percentiles4": {
+          "total": 6
+        }
+      }
+    },
+    "post_read": {
+      "stats": {
+        "numberOfRequests": {
+          "total": 36733,
+          "ok": 36733,
+          "ko": 0
+        },
+        "meanNumberOfRequestsPerSecond": {
+          "total": 40.81
+        },
+        "minResponseTime": {
+          "total": 0
+        },
+        "maxResponseTime": {
+          "total": 44
         },
         "percentiles1": {
           "total": 1
@@ -84,25 +144,25 @@
           "total": 2
         },
         "percentiles4": {
-          "total": 2
+          "total": 3
         }
       }
     },
     "post_create": {
       "stats": {
         "numberOfRequests": {
-          "total": 7108,
-          "ok": 7108,
+          "total": 7189,
+          "ok": 7189,
           "ko": 0
         },
         "meanNumberOfRequestsPerSecond": {
-          "total": 7.9
+          "total": 7.99
         },
         "minResponseTime": {
           "total": 2
         },
         "maxResponseTime": {
-          "total": 42
+          "total": 49
         },
         "percentiles1": {
           "total": 4
@@ -118,51 +178,21 @@
         }
       }
     },
-    "comment_read": {
-      "stats": {
-        "numberOfRequests": {
-          "total": 18048,
-          "ok": 18048,
-          "ko": 0
-        },
-        "meanNumberOfRequestsPerSecond": {
-          "total": 20.05
-        },
-        "minResponseTime": {
-          "total": 0
-        },
-        "maxResponseTime": {
-          "total": 46
-        },
-        "percentiles1": {
-          "total": 2
-        },
-        "percentiles2": {
-          "total": 2
-        },
-        "percentiles3": {
-          "total": 3
-        },
-        "percentiles4": {
-          "total": 5
-        }
-      }
-    },
     "Verify Created Post": {
       "stats": {
         "numberOfRequests": {
-          "total": 7108,
-          "ok": 7108,
+          "total": 7189,
+          "ok": 7189,
           "ko": 0
         },
         "meanNumberOfRequestsPerSecond": {
-          "total": 7.9
+          "total": 7.99
         },
         "minResponseTime": {
           "total": 0
         },
         "maxResponseTime": {
-          "total": 8
+          "total": 16
         },
         "percentiles1": {
           "total": 1
@@ -181,18 +211,18 @@
     "Read Post Comments": {
       "stats": {
         "numberOfRequests": {
-          "total": 18338,
-          "ok": 18338,
+          "total": 18196,
+          "ok": 18196,
           "ko": 0
         },
         "meanNumberOfRequestsPerSecond": {
-          "total": 20.38
+          "total": 20.22
         },
         "minResponseTime": {
           "total": 0
         },
         "maxResponseTime": {
-          "total": 43
+          "total": 72
         },
         "percentiles1": {
           "total": 2
@@ -211,8 +241,8 @@
     "author_register": {
       "stats": {
         "numberOfRequests": {
-          "total": 1778,
-          "ok": 1778,
+          "total": 1786,
+          "ok": 1786,
           "ko": 0
         },
         "meanNumberOfRequestsPerSecond": {
@@ -222,7 +252,7 @@
           "total": 2
         },
         "maxResponseTime": {
-          "total": 13
+          "total": 20
         },
         "percentiles1": {
           "total": 4
@@ -234,15 +264,15 @@
           "total": 5
         },
         "percentiles4": {
-          "total": 6
+          "total": 7
         }
       }
     },
     "Verify Author": {
       "stats": {
         "numberOfRequests": {
-          "total": 1778,
-          "ok": 1778,
+          "total": 1786,
+          "ok": 1786,
           "ko": 0
         },
         "meanNumberOfRequestsPerSecond": {
@@ -252,217 +282,7 @@
           "total": 0
         },
         "maxResponseTime": {
-          "total": 157
-        },
-        "percentiles1": {
-          "total": 1
-        },
-        "percentiles2": {
-          "total": 1
-        },
-        "percentiles3": {
-          "total": 2
-        },
-        "percentiles4": {
-          "total": 3
-        }
-      }
-    },
-    "tag_read": {
-      "stats": {
-        "numberOfRequests": {
-          "total": 44670,
-          "ok": 44670,
-          "ko": 0
-        },
-        "meanNumberOfRequestsPerSecond": {
-          "total": 49.63
-        },
-        "minResponseTime": {
-          "total": 0
-        },
-        "maxResponseTime": {
-          "total": 14
-        },
-        "percentiles1": {
-          "total": 1
-        },
-        "percentiles2": {
-          "total": 1
-        },
-        "percentiles3": {
-          "total": 1
-        },
-        "percentiles4": {
-          "total": 2
-        }
-      }
-    },
-    "comment_update": {
-      "stats": {
-        "numberOfRequests": {
-          "total": 1008,
-          "ok": 1008,
-          "ko": 0
-        },
-        "meanNumberOfRequestsPerSecond": {
-          "total": 1.12
-        },
-        "minResponseTime": {
-          "total": 2
-        },
-        "maxResponseTime": {
-          "total": 63
-        },
-        "percentiles1": {
-          "total": 3
-        },
-        "percentiles2": {
-          "total": 3
-        },
-        "percentiles3": {
-          "total": 4
-        },
-        "percentiles4": {
-          "total": 7
-        }
-      }
-    },
-    "post_update": {
-      "stats": {
-        "numberOfRequests": {
-          "total": 882,
-          "ok": 882,
-          "ko": 0
-        },
-        "meanNumberOfRequestsPerSecond": {
-          "total": 0.98
-        },
-        "minResponseTime": {
-          "total": 2
-        },
-        "maxResponseTime": {
-          "total": 39
-        },
-        "percentiles1": {
-          "total": 3
-        },
-        "percentiles2": {
-          "total": 3
-        },
-        "percentiles3": {
-          "total": 4
-        },
-        "percentiles4": {
-          "total": 6
-        }
-      }
-    },
-    "Verify Updated Comment": {
-      "stats": {
-        "numberOfRequests": {
-          "total": 1008,
-          "ok": 1008,
-          "ko": 0
-        },
-        "meanNumberOfRequestsPerSecond": {
-          "total": 1.12
-        },
-        "minResponseTime": {
-          "total": 0
-        },
-        "maxResponseTime": {
-          "total": 23
-        },
-        "percentiles1": {
-          "total": 1
-        },
-        "percentiles2": {
-          "total": 1
-        },
-        "percentiles3": {
-          "total": 1
-        },
-        "percentiles4": {
-          "total": 2
-        }
-      }
-    },
-    "Verify Updated Post": {
-      "stats": {
-        "numberOfRequests": {
-          "total": 882,
-          "ok": 718,
-          "ko": 164
-        },
-        "meanNumberOfRequestsPerSecond": {
-          "total": 0.98
-        },
-        "minResponseTime": {
-          "total": 0
-        },
-        "maxResponseTime": {
-          "total": 8
-        },
-        "percentiles1": {
-          "total": 1
-        },
-        "percentiles2": {
-          "total": 1
-        },
-        "percentiles3": {
-          "total": 1
-        },
-        "percentiles4": {
-          "total": 2
-        }
-      }
-    },
-    "comment_delete": {
-      "stats": {
-        "numberOfRequests": {
-          "total": 931,
-          "ok": 931,
-          "ko": 0
-        },
-        "meanNumberOfRequestsPerSecond": {
-          "total": 1.03
-        },
-        "minResponseTime": {
-          "total": 1
-        },
-        "maxResponseTime": {
-          "total": 10
-        },
-        "percentiles1": {
-          "total": 2
-        },
-        "percentiles2": {
-          "total": 2
-        },
-        "percentiles3": {
-          "total": 2
-        },
-        "percentiles4": {
-          "total": 3
-        }
-      }
-    },
-    "Verify Deleted Comment": {
-      "stats": {
-        "numberOfRequests": {
-          "total": 931,
-          "ok": 931,
-          "ko": 0
-        },
-        "meanNumberOfRequestsPerSecond": {
-          "total": 1.03
-        },
-        "minResponseTime": {
-          "total": 0
-        },
-        "maxResponseTime": {
-          "total": 77
+          "total": 33
         },
         "percentiles1": {
           "total": 1
@@ -481,18 +301,78 @@
     "post_delete": {
       "stats": {
         "numberOfRequests": {
-          "total": 876,
-          "ok": 876,
+          "total": 881,
+          "ok": 881,
           "ko": 0
         },
         "meanNumberOfRequestsPerSecond": {
-          "total": 0.97
+          "total": 0.98
         },
         "minResponseTime": {
           "total": 1
         },
         "maxResponseTime": {
-          "total": 9
+          "total": 18
+        },
+        "percentiles1": {
+          "total": 2
+        },
+        "percentiles2": {
+          "total": 2
+        },
+        "percentiles3": {
+          "total": 2
+        },
+        "percentiles4": {
+          "total": 4
+        }
+      }
+    },
+    "Verify Deleted Post": {
+      "stats": {
+        "numberOfRequests": {
+          "total": 881,
+          "ok": 881,
+          "ko": 0
+        },
+        "meanNumberOfRequestsPerSecond": {
+          "total": 0.98
+        },
+        "minResponseTime": {
+          "total": 0
+        },
+        "maxResponseTime": {
+          "total": 59
+        },
+        "percentiles1": {
+          "total": 1
+        },
+        "percentiles2": {
+          "total": 1
+        },
+        "percentiles3": {
+          "total": 2
+        },
+        "percentiles4": {
+          "total": 4
+        }
+      }
+    },
+    "comment_delete": {
+      "stats": {
+        "numberOfRequests": {
+          "total": 863,
+          "ok": 863,
+          "ko": 0
+        },
+        "meanNumberOfRequestsPerSecond": {
+          "total": 0.96
+        },
+        "minResponseTime": {
+          "total": 1
+        },
+        "maxResponseTime": {
+          "total": 18
         },
         "percentiles1": {
           "total": 2
@@ -508,21 +388,21 @@
         }
       }
     },
-    "Verify Deleted Post": {
+    "Verify Deleted Comment": {
       "stats": {
         "numberOfRequests": {
-          "total": 1,
-          "ok": null,
+          "total": 863,
+          "ok": 863,
           "ko": 0
         },
         "meanNumberOfRequestsPerSecond": {
-          "total": 0.97
+          "total": 0.96
         },
         "minResponseTime": {
           "total": 0
         },
         "maxResponseTime": {
-          "total": 9
+          "total": 22
         },
         "percentiles1": {
           "total": 1
@@ -535,6 +415,126 @@
         },
         "percentiles4": {
           "total": 3
+        }
+      }
+    },
+    "comment_update": {
+      "stats": {
+        "numberOfRequests": {
+          "total": 896,
+          "ok": 896,
+          "ko": 0
+        },
+        "meanNumberOfRequestsPerSecond": {
+          "total": 1
+        },
+        "minResponseTime": {
+          "total": 2
+        },
+        "maxResponseTime": {
+          "total": 52
+        },
+        "percentiles1": {
+          "total": 3
+        },
+        "percentiles2": {
+          "total": 3
+        },
+        "percentiles3": {
+          "total": 4
+        },
+        "percentiles4": {
+          "total": 6
+        }
+      }
+    },
+    "Verify Updated Comment": {
+      "stats": {
+        "numberOfRequests": {
+          "total": 896,
+          "ok": 896,
+          "ko": 0
+        },
+        "meanNumberOfRequestsPerSecond": {
+          "total": 1
+        },
+        "minResponseTime": {
+          "total": 0
+        },
+        "maxResponseTime": {
+          "total": 7
+        },
+        "percentiles1": {
+          "total": 1
+        },
+        "percentiles2": {
+          "total": 1
+        },
+        "percentiles3": {
+          "total": 1
+        },
+        "percentiles4": {
+          "total": 3
+        }
+      }
+    },
+    "post_update": {
+      "stats": {
+        "numberOfRequests": {
+          "total": 947,
+          "ok": 947,
+          "ko": 0
+        },
+        "meanNumberOfRequestsPerSecond": {
+          "total": 1.05
+        },
+        "minResponseTime": {
+          "total": 2
+        },
+        "maxResponseTime": {
+          "total": 36
+        },
+        "percentiles1": {
+          "total": 3
+        },
+        "percentiles2": {
+          "total": 3
+        },
+        "percentiles3": {
+          "total": 4
+        },
+        "percentiles4": {
+          "total": 7
+        }
+      }
+    },
+    "Verify Updated Post": {
+      "stats": {
+        "numberOfRequests": {
+          "total": 1,
+          "ok": null,
+          "ko": 205
+        },
+        "meanNumberOfRequestsPerSecond": {
+          "total": 1.05
+        },
+        "minResponseTime": {
+          "total": 0
+        },
+        "maxResponseTime": {
+          "total": 7
+        },
+        "percentiles1": {
+          "total": 1
+        },
+        "percentiles2": {
+          "total": 1
+        },
+        "percentiles3": {
+          "total": 1
+        },
+        "percentiles4": {
+          "total": 2
         }
       }
     }
