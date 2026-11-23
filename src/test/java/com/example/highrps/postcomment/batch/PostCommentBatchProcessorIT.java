@@ -1,10 +1,12 @@
 package com.example.highrps.postcomment.batch;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
 import com.example.highrps.author.domain.AuthorEntity;
 import com.example.highrps.common.AbstractIntegrationTest;
+import com.example.highrps.infrastructure.batch.UniqueConstraintConflictException;
 import com.example.highrps.post.domain.PostEntity;
 import com.example.highrps.postcomment.domain.PostCommentEntity;
 import java.time.Duration;
@@ -121,6 +123,25 @@ class PostCommentBatchProcessorIT extends AbstractIntegrationTest {
         await().atMost(Duration.ofSeconds(10))
                 .untilAsserted(() -> assertThat(postCommentRepository.findByCommentRefIdIn(List.of(commentId)))
                         .hasSize(1));
+    }
+
+    @Test
+    void processUpserts_duplicateTitleForDifferentCommentRollsBackBatch() {
+        long postId = testPost.getPostRefId();
+        long originalCommentId = 300004L;
+        String title = "Duplicate title";
+        postCommentBatchProcessor.processUpserts(List.of(buildCommentPayload(originalCommentId, postId, title)));
+
+        assertThatThrownBy(() -> postCommentBatchProcessor.processUpserts(List.of(
+                        buildCommentPayload(300005L, postId, "New comment"),
+                        buildCommentPayload(300006L, postId, title))))
+                .isInstanceOfSatisfying(UniqueConstraintConflictException.class, error -> {
+                    assertThat(error.getConstraintName()).isEqualTo("uc_postcommententity_title");
+                });
+
+        assertThat(postCommentRepository.findAll())
+                .extracting(PostCommentEntity::getCommentRefId)
+                .containsExactly(originalCommentId);
     }
 
     // ── Payload builder ───────────────────────────────────────────────────────

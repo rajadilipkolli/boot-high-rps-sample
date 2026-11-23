@@ -134,13 +134,14 @@ public class PostCommentBatchProcessor implements EntityBatchProcessor {
             List<Long> commentIds =
                     candidates.stream().map(ParsedComment::commentId).collect(Collectors.toList());
 
-            // Step 2c: Insert genuinely new rows with resolved post_id (no conflict target).
+            // Step 2c: A replay can collide on both comment_ref_id and (title, post_id).
+            // Ignore either insert conflict; the locked refetch below checks that our comment exists.
             String insertSql = "INSERT INTO post_comments "
                     + "(id, comment_ref_id, title, content, published, published_at, post_id, version, created_at, modified_at) "
                     + "VALUES (nextval('post_comments_seq'), ?, ?, ?, ?, ?, "
                     + "       (SELECT id FROM posts WHERE post_ref_id = ?), "
                     + "       0, now(), now()) "
-                    + "ON CONFLICT (comment_ref_id) DO NOTHING";
+                    + "ON CONFLICT DO NOTHING";
 
             jdbcTemplate.batchUpdate(insertSql, new BatchPreparedStatementSetter() {
                 @Override
@@ -177,12 +178,14 @@ public class PostCommentBatchProcessor implements EntityBatchProcessor {
                 PostCommentEntity entity = lockedById.get(parsed.commentId());
 
                 if (entity == null) {
-                    // Row missing after insert → concurrent conflict.
-                    // Throw Phase-1 conflict exception.
+                    // No row for this comment ID: fail the batch so the scheduler can retry it individually.
                     throw new UniqueConstraintConflictException(
                             "post-comment",
-                            "uc_postcommententity_comment_ref_id",
-                            List.of(String.valueOf(parsed.commentId())));
+                            "uc_postcommententity_title",
+                            List.of(
+                                    parsed.result().title(),
+                                    String.valueOf(
+                                            postsById.get(parsed.postId()).getId())));
                 }
 
                 try {
